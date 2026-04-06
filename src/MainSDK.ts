@@ -1,4 +1,3 @@
-import { VaultWalletAddress, TransactionRequest, SignedMessage } from "@fireblocks/ts-sdk";
 import { type Hex, type Address, pad, concat, toHex, toRlp, numberToHex } from "viem";
 import { FireblocksService, BlockchainApiService } from "./services/index.js";
 import {
@@ -10,9 +9,7 @@ import {
   GetNativeBalanceResponse,
   GetTransactionHistoryParams,
   GetTransactionHistoryResponse,
-  GetTransactionsHistoryOpts,
   TokenType,
-  TransactionHistoryResponse,
   TransactionType,
   VaultData,
 } from "./types/index.js";
@@ -166,44 +163,6 @@ export class MainSDK {
       this.logger.error(`Error fetching transaction history: ${formatErrorMessage(error)}`);
       return { success: false, error: formatErrorMessage(error) };
     }
-  }
-
-  public async getVaultAccountAddress(
-    vaultAccountId: string,
-    assetId: string,
-    index: number = 0
-  ): Promise<VaultWalletAddress> {
-    return await this.fireblocksService.getVaultAccountAddress(vaultAccountId, assetId, index);
-  }
-
-  public async getVaultAccountAddresses(
-    vaultAccountId: string,
-    assetId: string
-  ): Promise<VaultWalletAddress[]> {
-    return await this.fireblocksService.getVaultAccountAddresses(vaultAccountId, assetId);
-  }
-
-  public async submitTransaction(
-    _vaultAccountId: string,
-    transactionRequest: TransactionRequest,
-    waitForCompletion: boolean = true
-  ): Promise<SignedMessage | null> {
-    if (!waitForCompletion) {
-      throw new Error(
-        "Non-blocking transaction submission not yet implemented. Set waitForCompletion to true."
-      );
-    }
-    return await this.fireblocksService.broadcastTransaction(transactionRequest);
-  }
-
-  public async getTransactionsHistory(
-    vaultAccountId: string,
-    options: GetTransactionsHistoryOpts = {}
-  ): Promise<TransactionHistoryResponse> {
-    this.logger.debug(`Getting transaction history for vault ${vaultAccountId}`, options);
-    await this.blockchainApiService.getTransactionHistory(options);
-    this.logger.warn("getTransactionsHistory not yet fully implemented - returning empty result");
-    return { transactions: [], total: 0, hasMore: false };
   }
 
   /**

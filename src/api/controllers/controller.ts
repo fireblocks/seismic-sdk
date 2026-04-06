@@ -1,7 +1,7 @@
 import { Request, Response } from "express";
 import { MainSDK } from "../../MainSDK.js";
 import { Logger } from "../../utils/index.js";
-import { SdkApiError, GetTransactionsHistoryOpts } from "../../types/index.js";
+import { SdkApiError } from "../../types/index.js";
 
 export class ApiController {
   private sdk: MainSDK;
@@ -10,64 +10,6 @@ export class ApiController {
   constructor(sdk: MainSDK) {
     this.sdk = sdk;
   }
-
-  // ─── Fireblocks routes ─────────────
-
-  public getVaultAccountAddress = async (req: Request, res: Response) => {
-    const { vaultAccountId, assetId } = req.params;
-    const index = req.query.index ? parseInt(req.query.index as string) : 0;
-    try {
-      const result = await this.sdk.getVaultAccountAddress(vaultAccountId, assetId, index);
-      res.status(200).json({ success: true, data: result });
-    } catch (error) {
-      this.handleError(error, res, "getVaultAccountAddress");
-    }
-  };
-
-  public getVaultAccountAddresses = async (req: Request, res: Response) => {
-    const { vaultAccountId, assetId } = req.params;
-    try {
-      const result = await this.sdk.getVaultAccountAddresses(vaultAccountId, assetId);
-      res.status(200).json({ success: true, data: result });
-    } catch (error) {
-      this.handleError(error, res, "getVaultAccountAddresses");
-    }
-  };
-
-  public submitTransaction = async (req: Request, res: Response) => {
-    const { vaultAccountId } = req.params;
-    const { transactionRequest, waitForCompletion = true } = req.body;
-    try {
-      const result = await this.sdk.submitTransaction(
-        vaultAccountId,
-        transactionRequest,
-        waitForCompletion
-      );
-      res.status(200).json({ success: true, data: result });
-    } catch (error) {
-      this.handleError(error, res, "submitTransaction");
-    }
-  };
-
-  public getTransactionsHistory = async (req: Request, res: Response) => {
-    const { vaultAccountId } = req.params;
-    const { assetId, limit, offset, status, startDate, endDate } =
-      req.query as unknown as GetTransactionsHistoryOpts;
-    try {
-      const params: GetTransactionsHistoryOpts = {
-        ...(assetId && { assetId }),
-        ...(limit && { limit }),
-        ...(offset !== undefined && { offset }),
-        ...(status && { status }),
-        ...(startDate && { startDate }),
-        ...(endDate && { endDate }),
-      };
-      const result = await this.sdk.getTransactionsHistory(vaultAccountId, params);
-      res.status(200).json({ success: true, data: result });
-    } catch (error) {
-      this.handleError(error, res, "getTransactionsHistory");
-    }
-  };
 
   // ─── Seismic routes ──────────────────────────────────────────────────────
 
