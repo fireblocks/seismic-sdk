@@ -37,7 +37,23 @@ const startServer = () => {
   // Mount API routes
   app.use("/api", configureRouter(sdk));
 
-  // Health check endpoint
+  /**
+   * @openapi
+   * /health:
+   *   get:
+   *     tags:
+   *       - Health
+   *     summary: Health check
+   *     description: Returns 200 when the server is up and running.
+   *     responses:
+   *       200:
+   *         description: Server is alive
+   *         content:
+   *           text/plain:
+   *             schema:
+   *               type: string
+   *               example: Alive
+   */
   app.get("/health", (_req: Request, res: Response) => {
     logger.info("alive");
     res.status(200).send("Alive");
