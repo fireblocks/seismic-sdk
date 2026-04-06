@@ -101,8 +101,22 @@ export type GetTransactionHistoryParams =
  * Generic unsigned transaction object returned by buildUnsignedTransaction / serializeTransaction.
  * Implementors should extend this with blockchain-specific fields.
  */
+export interface EvmTxFields {
+  from: string;
+  to: string;
+  value: string;
+  data: string;
+  nonce: string;
+  gasPrice: string;
+  gas: string;
+}
+
 export interface UnsignedTransaction {
   unsignedTx?: unknown;
+  /** EIP-155 keccak256 hash of the RLP-encoded tx — this is what Fireblocks signs */
+  signingHash?: string;
+  /** Raw EVM transaction fields, needed to assemble the signed RLP after signing */
+  evmTxFields?: EvmTxFields;
   signature?: unknown;
   [key: string]: unknown;
 }
@@ -128,12 +142,13 @@ export enum TransactionType {
 }
 
 /**
- * Token types enumeration for different blockchain assets, including native coins and custom tokens.
- * can be names or identifiers depending on the blockchain, adjust as needed.
+ * Token types for Seismic.
+ * SRC20 is Seismic's privacy-preserving ERC-20 variant — balances are stored
+ * as encrypted suint256 values and require signed reads to query.
  */
 export enum TokenType {
-  Native = "NATIVE", // Represents the blockchain's native coin, e.g., ETH for Ethereum, BTC for Bitcoin, adjust name as needed
-  ShitCoinExample = "RANDOM_SHITCOIN_EXAMPLE", // Example of a custom fungible token type for the blockchain, adjust as needed
+  Native = "NATIVE",
+  SRC20 = "SRC20",
 }
 
 /** Information about a specific token, including its ID, name, and decimal precision.
@@ -145,13 +160,12 @@ export type TokenInfo = {
   decimals: number;
 };
 /**
- * Enumeration for different blockchain network environments.
- * Some blockchains need the network name or identifier to be specified with API requests.
- * Adjust names as needed based on supported networks.
+ * Seismic network environments.
+ * Only testnet (chain ID 5124) is currently live.
  */
 export enum Networks {
-  Mainnet = "example_mainnet", // Adjust name as needed
-  Testnet = "example_testnet", // Adjust name as needed
+  Mainnet = "seismic_mainnet",
+  Testnet = "seismic_testnet",
 }
 
 export type SDKResponse =
@@ -163,9 +177,20 @@ export type SDKResponse =
 /**
  * Per-vault identity state cached in MainSDK's vault map.
  * Populated lazily on first use of each vault account.
+ * encryptionSk is derived once per session from a deterministic Fireblocks RAW signature
+ * (SHA-256 of fullSig over SEED_MESSAGE) and cached in process memory only — never on disk.
  */
 export interface VaultData {
   vaultAccountId: string;
   address: string;
   publicKey: string;
+  encryptionSk?: string; // 32-byte hex; in-memory only, zeroed on shutdown
 }
+
+/**
+ * Transfer type for POST /api/:vaultId/transfer.
+ * ETH  — plain ETH transfer
+ * ERC20 — standard plaintext ERC-20 transfer
+ * SRC20 — Seismic shielded transfer (type 0x4A, AES-GCM encrypted calldata)
+ */
+export type TransferType = "ETH" | "ERC20" | "SRC20";

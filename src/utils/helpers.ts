@@ -9,15 +9,17 @@ import {
   TokenType,
   TransactionType,
 } from "../types/index.js";
-import { config } from "./index.js";
+import { config, chain_info } from "./index.js";
 import { MainSDK } from "../MainSDK.js";
 
-// Rreturns credentials for Fireblocks SDK initialization
-export function getFinalFireblocksSDKParams(fireblocksConfig?: FireblocksConfig): {
+// Returns credentials for Fireblocks SDK initialization
+export const getFinalFireblocksSDKParams = (
+  fireblocksConfig?: FireblocksConfig
+): {
   apiKey: string;
   secretKey: string;
   basePath: string;
-} {
+} => {
   var privateKey: string;
   if (fireblocksConfig && fireblocksConfig.apiSecret) {
     privateKey =
@@ -25,7 +27,7 @@ export function getFinalFireblocksSDKParams(fireblocksConfig?: FireblocksConfig)
         ? readFileSync(fireblocksConfig.apiSecret, "utf8")
         : fireblocksConfig.apiSecret;
   } else {
-    const secretKeyPath = process.env.FIREBLOCKS_SECRET_KEY_PATH || "";
+    const secretKeyPath = process.env.FIREBLOCKS_API_USER_SECRET_KEY_PATH || "";
     privateKey = fs.readFileSync(secretKeyPath, "utf8");
   }
 
@@ -40,7 +42,7 @@ export function getFinalFireblocksSDKParams(fireblocksConfig?: FireblocksConfig)
     secretKey: privateKey,
     basePath,
   };
-}
+};
 
 /**
  * Checks and validates transaction parameters, adjusting the amount if necessary.
@@ -53,7 +55,7 @@ export function getFinalFireblocksSDKParams(fireblocksConfig?: FireblocksConfig)
  * @returns A promise that resolves to an object indicating if parameters are valid, the final amount, and reason if invalid.
  * @throws {Error} If parameter validation fails.
  */
-export async function checkParamsAndAdjustAmount(
+export const checkParamsAndAdjustAmount = async (
   sdk: MainSDK,
   vaultAccountId: string,
   recipientAddress: string,
@@ -65,7 +67,7 @@ export async function checkParamsAndAdjustAmount(
   validParams: boolean;
   finalAmount?: bigint;
   reason?: string;
-}> {
+}> => {
   try {
     if (!validateAddress(recipientAddress)) {
       return {
@@ -150,10 +152,10 @@ export async function checkParamsAndAdjustAmount(
   } catch (error) {
     throw new Error(`Parameter validation failed: ${formatErrorMessage(error)}`);
   }
-}
+};
 
 // Trim spaces and ensure only digit characters remain
-export function trimVaultAccountId(vaultAccountId: string | number): number {
+export const trimVaultAccountId = (vaultAccountId: string | number): number => {
   if (typeof vaultAccountId === "string") {
     // Trim spaces and ensure only digit characters remain
     const trimmedVaultAccountId =
@@ -165,10 +167,10 @@ export function trimVaultAccountId(vaultAccountId: string | number): number {
   } else {
     return vaultAccountId;
   }
-}
+};
 
 // Use this function to validate transfer amounts
-export function validateAmount(amount: string | number): boolean {
+export const validateAmount = (amount: string | number): boolean => {
   try {
     const num = typeof amount === "number" ? amount : Number(amount);
     if (isNaN(num) || num <= 0) {
@@ -179,41 +181,66 @@ export function validateAmount(amount: string | number): boolean {
   } catch {
     throw new Error("validateAmount Failed : Error validating amounts");
   }
-}
+};
 
 // Use this function to verify if an address is valid for the blockchain
-export function validateAddress(address: string): boolean {
+export const validateAddress = (address: string): boolean => {
   if (!address) return false;
 
   // Implement blockchain-specific address validation logic here
   return true; // Placeholder
-}
+};
 
-// Use this function to convert native coin amount to smallest units for that blockchain
-export function coinToUnits(_amount: number | string): bigint {
-  // implement conversion logic here
-  return BigInt(0); // Placeholder
-}
+// Converts ETH (human-readable) to wei (10^18 smallest units)
+export const coinToUnits = (amount: number | string): bigint => {
+  const n = typeof amount === "string" ? parseFloat(amount) : amount;
+  return BigInt(Math.round(n * 10 ** chain_info.coinDecimals));
+};
 
-// Use this function to convert native coin amount in smallest units to human readable amount
-export function unitsToCoin(_units: bigint | number | string): number {
-  // implement conversion logic here
-  return 0; // Placeholder
-}
+// Converts wei back to ETH (human-readable)
+export const unitsToCoin = (units: bigint | number | string): number => {
+  return Number(units) / 10 ** chain_info.coinDecimals;
+};
 
 // Use this function to convert fungible token amount to smallest units for that token
-export function ftToUnits(_amount: number | string, _token: TokenType): bigint {
+export const ftToUnits = (_amount: number | string, _token: TokenType): bigint => {
   // implement conversion logic here
   return BigInt(0); // Placeholder
-}
+};
 
 // Use this function to convert fungible token amount in smallest units to human readable amount
-export function unitsToFt(_units: bigint | number | string, _token: TokenType): number {
+export const unitsToFt = (_units: bigint | number | string, _token: TokenType): number => {
   // implement conversion logic here
   return 0; // Placeholder
-}
+};
+
+const safeStringify = (obj: unknown): string => {
+  const seen = new WeakSet();
+  try {
+    return JSON.stringify(obj, (_key, value) => {
+      if (typeof value === "object" && value !== null) {
+        if (seen.has(value)) return "[Circular]";
+        seen.add(value);
+      }
+      return value;
+    });
+  } catch {
+    return String(obj);
+  }
+};
 
 // Format error messages consistently
-export function formatErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
+export const formatErrorMessage = (error: unknown): string => {
+  if (error instanceof Error) {
+    // Axios/SDK errors: prefer the response body if present
+    const maybeAxios = error as { response?: { data?: unknown } };
+    if (maybeAxios.response?.data) {
+      return safeStringify(maybeAxios.response.data);
+    }
+    return error.message;
+  }
+  if (typeof error === "object" && error !== null) {
+    return safeStringify(error);
+  }
+  return String(error);
+};

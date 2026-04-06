@@ -121,12 +121,14 @@ export const getTxStatus = async (
  */
 export const getPublicKeyForDerivationPathAndAlgorithm = async (
   fireblocksSDK: Fireblocks,
-  vaultAccountId: string
+  vaultAccountId: string,
+  testnet: boolean = false
 ): Promise<string> => {
+  // Fireblocks testnet workspaces always use coin type 1 regardless of the blockchain.
+  // Mainnet workspaces use the SLIP-44 coin type (60 for EVM chains).
+  const coinType = testnet ? 1 : derivationPath.coinType;
   const requestParams: VaultsApiGetPublicKeyInfoRequest = {
-    derivationPath: `[${derivationPath.purpose}, ${
-      derivationPath.coinType
-    }, ${vaultAccountId}, ${derivationPath.change}, ${derivationPath.addressIndex}]`,
+    derivationPath: `[${derivationPath.purpose}, ${coinType}, ${vaultAccountId}, ${derivationPath.change}, ${derivationPath.addressIndex}]`,
     algorithm: signingAlgorithm,
     compressed: true,
   };
@@ -166,8 +168,9 @@ export const validateApiCredentials = (
     throw new Error("API key is not a valid UUID v4.");
   }
 
-  // Validate secret key path exists and is a file
-  if (!fs.existsSync(secretKeyPath) || !fs.statSync(secretKeyPath).isFile()) {
+  // Validate secret key: accept either a PEM key string or a valid file path
+  const isPemContent = secretKeyPath.trimStart().startsWith("-----BEGIN");
+  if (!isPemContent && (!fs.existsSync(secretKeyPath) || !fs.statSync(secretKeyPath).isFile())) {
     throw new Error(`Secret key file does not exist at path: ${secretKeyPath}`);
   }
 

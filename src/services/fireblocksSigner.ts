@@ -7,24 +7,62 @@ import {
   FireblocksResponse,
   TransactionStateEnum,
   SignedMessageAlgorithmEnum,
-  SignedMessageSignature,
+  SignedMessage,
 } from "@fireblocks/ts-sdk";
+import { type Hex, concat, pad, toHex } from "viem";
 import { derivationPath, formatErrorMessage } from "../utils/index.js";
+import { Logger } from "../utils/logger.js";
 
 export class FireblocksSigner {
-  constructor(public fireblocks: Fireblocks) {}
+  private readonly logger = new Logger("services:fireblocks-signer");
+  private readonly coinType: number;
 
-  createTransactionPayload = (): TransactionRequest => {
+  constructor(
+    public fireblocks: Fireblocks,
+    testnet: boolean = false
+  ) {
+    // Fireblocks testnet workspaces always use coin type 1 for all assets.
+    // Mainnet workspaces use SLIP-44 standard (60 for EVM chains).
+    this.coinType = testnet ? 1 : derivationPath.coinType;
+  }
+
+  /**
+   * Builds the base RAW signing transaction payload.
+   * `rawMessageData` (including content and derivation path) is set separately
+   * in rawSign() so each call can provide its own message and vault-specific path.
+   */
+  createTransactionPayload = (
+    vaultAccountId: string,
+    hexContent: string,
+    purpose: string
+  ): TransactionRequest => {
     return {
-      note: `Raw signing request - ${new Date().toISOString()}`,
+      note: `[Seismic SDK] vault:${vaultAccountId} | ${purpose} | ${new Date().toISOString()}`,
+      // BTC_TEST is required by Fireblocks for RAW signing operations
+      // The actual key selection is done via the derivation path in rawMessageData.
+      assetId: "BTC_TEST",
       source: {
         type: TransferPeerPathType.VaultAccount,
+        id: vaultAccountId,
       },
       operation: TransactionOperation.Raw,
       extraParameters: {
         rawMessageData: {
-          messages: [{}],
-          algorithm: SignedMessageAlgorithmEnum.EcdsaSecp256K1, // Adjust algorithm as needed
+          messages: [
+            {
+              content: hexContent,
+              // BIP44 EVM path: m/44'/60'/{vaultId}'/0/0
+              // coinType 60 = Ethereum and all EVM-compatible chains
+              derivationPath: [
+                derivationPath.purpose, // 44
+                this.coinType, // 60 mainnet, 1 testnet
+                parseInt(vaultAccountId), // vault account index
+                derivationPath.change, // 0
+                derivationPath.addressIndex, // 0
+              ],
+            },
+          ],
+          algorithm: SignedMessageAlgorithmEnum.EcdsaSecp256K1,
         },
       },
     };
@@ -34,9 +72,9 @@ export class FireblocksSigner {
     let response: FireblocksResponse<TransactionResponse> =
       await this.fireblocks.transactions.getTransaction({ txId });
     let tx: TransactionResponse = response.data;
-    const messageToConsole: string = `Transaction ${tx.id} is currently at status - ${tx.status}`;
 
-    console.log(messageToConsole);
+    this.logger.debug(`tx:${txId} status=${tx.status}`);
+
     while (tx.status !== TransactionStateEnum.Completed) {
       await new Promise((resolve) => setTimeout(resolve, 3000));
 
@@ -48,24 +86,38 @@ export class FireblocksSigner {
         case TransactionStateEnum.Cancelled:
         case TransactionStateEnum.Failed:
         case TransactionStateEnum.Rejected:
-          throw new Error(
-            `Signing request failed/blocked/cancelled: Transaction: ${tx.id} status is ${tx.status}`
-          );
+          throw new Error(`RAW signing failed | txId:${tx.id} | status:${tx.status}`);
         default:
-          console.log(messageToConsole);
+          this.logger.debug(`tx:${txId} status=${tx.status}`);
           break;
       }
     }
-    while (tx.status !== TransactionStateEnum.Completed);
     return tx;
   };
 
+  /**
+   * Signs an arbitrary 32-byte payload via Fireblocks RAW signing.
+   *
+   * Returns the full SignedMessage object, which includes both the signature (r/s/v/fullSig)
+   * and the vault's compressed secp256k1 public key. needed for address derivation and
+   * encryption key derivation.
+   *
+   * Note: Fireblocks returns v as 0 or 1. Use packSignature() to normalize to 27/28
+   * and zero-pad r/s before use with ecrecover.
+   *
+   * @param content        - 32-byte message to sign (hex, with or without 0x prefix)
+   * @param vaultAccountId - Fireblocks vault account ID
+   * @param purpose        - Short label describing why this signature is being requested.
+   *                         Shown in the Fireblocks console and activity log — make it
+   *                         descriptive so ops can identify the operation without needing
+   *                         to correlate SDK logs
+   *                         (e.g. "derive-encryption-key", "src20-balance-read", "seismic-transfer")
+   */
   rawSign = async (
     content: string,
     vaultAccountId: string,
-    txNote?: string,
-    _testnet: boolean = false
-  ): Promise<SignedMessageSignature> => {
+    purpose: string = "raw-sign"
+  ): Promise<SignedMessage> => {
     try {
       if (typeof content !== "string") {
         throw new Error("Content for raw signing must be a hex string");
@@ -73,27 +125,15 @@ export class FireblocksSigner {
 
       const hexContent = content.startsWith("0x") ? content.slice(2) : content;
 
-      const transactionPayload = this.createTransactionPayload();
-
-      if (txNote) {
-        transactionPayload.note = txNote;
+      if (hexContent.length !== 64) {
+        throw new Error(
+          `Raw message must be exactly 32 bytes (64 hex chars), got ${hexContent.length} chars`
+        );
       }
 
-      (transactionPayload.extraParameters as Record<string, unknown>).rawMessageData = {
-        messages: [
-          {
-            content: hexContent,
-            derivationPath: [
-              derivationPath.purpose,
-              derivationPath.coinType,
-              vaultAccountId,
-              derivationPath.change,
-              derivationPath.addressIndex,
-            ],
-          },
-        ],
-        algorithm: SignedMessageAlgorithmEnum.EcdsaSecp256K1, // Adjust algorithm as needed
-      };
+      const transactionPayload = this.createTransactionPayload(vaultAccountId, hexContent, purpose);
+
+      this.logger.info(`Submitting RAW sign | vault:${vaultAccountId} | purpose:${purpose}`);
 
       const transactionResponse = await this.fireblocks.transactions.createTransaction({
         transactionRequest: transactionPayload,
@@ -103,14 +143,44 @@ export class FireblocksSigner {
       if (!txId) {
         throw new Error("Transaction ID is undefined.");
       }
+
+      this.logger.debug(
+        `RAW sign submitted | txId:${txId} | vault:${vaultAccountId} | purpose:${purpose}`
+      );
+
       const txInfo = await this.getTxStatus(txId);
 
-      const signature = txInfo.signedMessages![0].signature!;
+      const signedMessage = txInfo.signedMessages?.[0];
+      if (!signedMessage) {
+        throw new Error("No signed messages returned from Fireblocks");
+      }
 
-      return signature;
+      this.logger.info(`RAW sign completed | txId:${txId} | vault:${vaultAccountId}`);
+
+      return signedMessage;
     } catch (error) {
-      console.log(`Caught error in rawSign: ${error}`);
+      this.logger.error(
+        `RAW sign failed | vault:${vaultAccountId} | purpose:${purpose} | ${formatErrorMessage(error)}`
+      );
       throw new Error(`Error in rawSign: ${formatErrorMessage(error)}`);
     }
+  };
+
+  /**
+   * Packs r/s/v from a Fireblocks SignedMessage signature into a standard 65-byte
+   * Ethereum signature (r || s || v), ready for use with ecrecover.
+   *
+   * Fireblocks quirks handled here:
+   *   - v is returned as 0 or 1; ecrecover expects 27 or 28
+   *   - r and s must be zero-padded to exactly 32 bytes each
+   */
+  packSignature = (sig: SignedMessage["signature"]): Hex => {
+    if (!sig?.r || !sig?.s || sig?.v === undefined) {
+      throw new Error("Incomplete signature from Fireblocks (missing r, s, or v)");
+    }
+    const v = sig.v < 27 ? sig.v + 27 : sig.v;
+    const rPadded = pad(`0x${sig.r.replace(/^0x/, "")}` as Hex, { size: 32 });
+    const sPadded = pad(`0x${sig.s.replace(/^0x/, "")}` as Hex, { size: 32 });
+    return concat([rPadded, sPadded, toHex(v, { size: 1 })]);
   };
 }
