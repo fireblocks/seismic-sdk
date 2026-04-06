@@ -1,8 +1,10 @@
-import { VaultWalletAddress, SignedMessageSignature, TransactionRequest } from "@fireblocks/ts-sdk";
+import { VaultWalletAddress, TransactionRequest, SignedMessage } from "@fireblocks/ts-sdk";
+import { type Hex, type Address, pad, concat, toHex, toRlp, numberToHex } from "viem";
 import { FireblocksService, BlockchainApiService } from "./services/index.js";
 import {
   BroadcastResult,
   CreateTransactionResponse,
+  EvmTxFields,
   FireblocksConfig,
   GetFtBalancesResponse,
   GetNativeBalanceResponse,
@@ -20,7 +22,10 @@ import {
   checkParamsAndAdjustAmount,
   formatErrorMessage,
   unitsToCoin,
+  SEED_MESSAGE_HEX,
 } from "./utils/index.js";
+import { deriveKeyFromSignature } from "./crypto/key-derivation.js";
+import { buildBalanceReadMessage, createExpiry } from "./seismic/signature.js";
 
 /**
  * Configuration for MainSDK
@@ -181,12 +186,7 @@ export class MainSDK {
     _vaultAccountId: string,
     transactionRequest: TransactionRequest,
     waitForCompletion: boolean = true
-  ): Promise<{
-    signature: SignedMessageSignature;
-    content?: string;
-    publicKey?: string;
-    algorithm?: string;
-  } | null> {
+  ): Promise<SignedMessage | null> {
     if (!waitForCompletion) {
       throw new Error(
         "Non-blocking transaction submission not yet implemented. Set waitForCompletion to true."
@@ -283,17 +283,47 @@ export class MainSDK {
         token
       );
 
-      const unsignedTx = transactionToSign.unsignedTx as string;
+      const { signingHash, evmTxFields } = transactionToSign;
+      if (!signingHash || !evmTxFields) {
+        throw new Error("serializeTransaction did not return signingHash or evmTxFields");
+      }
 
-      const signature = await this.fireblocksService.signTransaction(
-        unsignedTx,
+      // Fireblocks signs the 32-byte EIP-155 hash (strip 0x prefix)
+      const signedMsg = await this.fireblocksService.signTransaction(
+        (signingHash as string).slice(2),
         vaultData.vaultAccountId,
-        note || ""
+        note || "eth-transfer"
       );
 
-      transactionToSign.signature = signature; // Adjust as needed, Add the signature to the transaction as the blockchain API expects it
+      const sig = signedMsg.signature;
+      if (!sig?.r || !sig?.s || sig.v === undefined) {
+        throw new Error("Incomplete signature from Fireblocks (missing r, s, or v)");
+      }
 
-      const result = await this.blockchainApiService.broadcastTransaction(unsignedTx);
+      // EIP-155 replay-protected v: v = chainId * 2 + 35 + recoveryBit
+      const chainId = this.blockchainApiService.getChainId();
+      const recoveryBit = sig.v < 27 ? sig.v : sig.v - 27;
+      const v = BigInt(chainId) * 2n + 35n + BigInt(recoveryBit);
+
+      const r = `0x${sig.r.replace(/^0x/, "").padStart(64, "0")}` as Hex;
+      const s = `0x${sig.s.replace(/^0x/, "").padStart(64, "0")}` as Hex;
+
+      const tx = evmTxFields as EvmTxFields;
+
+      // RLP-encode the signed transaction
+      const signedRlp = toRlp([
+        tx.nonce === "0x0" || tx.nonce === "0x" ? "0x" : tx.nonce as Hex,
+        tx.gasPrice as Hex,
+        tx.gas as Hex,
+        tx.to as Hex,
+        tx.value as Hex,
+        tx.data as Hex,
+        numberToHex(v),
+        r,
+        s,
+      ]);
+
+      const result = await this.blockchainApiService.broadcastTransaction(signedRlp);
       return result;
     } catch (error) {
       throw new Error(`Failed to build, sign or send transaction: ${formatErrorMessage(error)}`);
@@ -424,12 +454,216 @@ export class MainSDK {
   };
 
   /**
-   * Gracefully shutdown the SDK
+   * Returns the vault's derived Seismic/ETH address (from its MPC public key).
+   */
+  public getSeismicAddress = async (vaultId: string): Promise<string> => {
+    const { address } = await this.ensureVaultData(vaultId);
+    return address;
+  };
+
+  /**
+   * Returns the vault's compressed secp256k1 MPC public key.
+   */
+  public getVaultPublicKey = async (vaultId: string): Promise<string> => {
+    const { publicKey } = await this.ensureVaultData(vaultId);
+    return publicKey;
+  };
+
+  /**
+   * Returns the public key for a specific vault asset address by BIP-44 derivation path.
+   *
+   * @param vaultAccountId - The Fireblocks vault account ID
+   * @param assetId - The asset ID (e.g. 'ETH', 'BTC')
+   * @param change - BIP-44 change index (0 = external, 1 = internal/change)
+   * @param addressIndex - BIP-44 address index
+   */
+  public getPublicKey = async (
+    vaultAccountId: string,
+    assetId: string,
+    change: number = 0,
+    addressIndex: number = 0
+  ): Promise<string> => {
+    return await this.fireblocksService.getAssetPublicKey(vaultAccountId, assetId, change, addressIndex);
+  };
+
+  /**
+   * Reads ERC-20 balances for a vault address across one or more contracts.
+   *
+   * @param vaultId   - Fireblocks vault account ID
+   * @param contracts - Comma-separated or array of ERC-20 contract addresses
+   */
+  public getErc20Balances = async (
+    vaultId: string,
+    contracts: string[]
+  ): Promise<{ contractAddress: string; balance: string }[]> => {
+    const { address } = await this.ensureVaultData(vaultId);
+    const results = await Promise.all(
+      contracts.map(async (contractAddress) => {
+        try {
+          const raw = await this.blockchainApiService.readErc20Balance(address, contractAddress);
+          return { contractAddress, balance: raw.toString() };
+        } catch {
+          return { contractAddress, balance: "0" };
+        }
+      })
+    );
+    return results;
+  };
+
+  // ─── Seismic shielded operations ────────────────────────────────────────────
+
+  /**
+   * Derives and caches the deterministic encryption key for a vault.
+   *
+   * Signs SEED_MESSAGE_HEX via Fireblocks RAW signing, then computes
+   * SHA-256(fullSig) to produce a stable 32-byte encryptionSk. The result is
+   * cached in the vault's VaultData entry — subsequent calls return the cached
+   * value without a Fireblocks round-trip.
+   *
+   * The encryptionSk is held in process memory only and zeroed on shutdown.
+   */
+  public deriveEncryptionKey = async (vaultId: string): Promise<Hex> => {
+    const vaultData = await this.ensureVaultData(vaultId);
+    if (vaultData.encryptionSk) return vaultData.encryptionSk as Hex;
+
+    this.logger.info(`Deriving encryption key | vault:${vaultId}`);
+    const signedMsg = await this.fireblocksService.signTransaction(
+      SEED_MESSAGE_HEX.slice(2), // strip 0x — rawSign expects plain hex
+      vaultId,
+      "derive-encryption-key"
+    );
+
+    const fullSig = signedMsg.signature?.fullSig;
+    if (!fullSig) throw new Error(`Fireblocks did not return a signature for vault ${vaultId}`);
+
+    const encryptionSk = deriveKeyFromSignature(fullSig);
+    vaultData.encryptionSk = encryptionSk;
+    this.logger.info(`Encryption key derived and cached | vault:${vaultId}`);
+    return encryptionSk;
+  };
+
+  /**
+   * Reads a vault's SRC-20 balance via a Fireblocks-signed read.
+   *
+   * Flow:
+   * 1. Build the EIP-191 message for balanceOfSigned (keccak256 of owner + expiry)
+   * 2. Fireblocks RAW-signs the 32-byte hash (proves vault identity without raw key)
+   * 3. Create a Seismic public client and call balanceOfSigned(owner, expiry, sig)
+   * 4. The SRC-20 contract verifies via ecrecover and decrypts the shielded balance
+   *
+   * @param vaultId         - Fireblocks vault account ID
+   * @param contractAddress - SRC-20 contract address (0x-prefixed)
+   * @returns Balance in whole ETH units (wei / 1e18)
+   */
+  public getSrc20Balance = async (
+    vaultId: string,
+    contractAddress: string
+  ): Promise<GetNativeBalanceResponse> => {
+    try {
+      const { address } = await this.ensureVaultData(vaultId);
+      const ownerAddress = address as Address;
+      const expiry = createExpiry();
+
+      const messageHash = buildBalanceReadMessage(ownerAddress, expiry);
+      const signedMsg = await this.fireblocksService.signTransaction(
+        messageHash.slice(2), // strip 0x
+        vaultId,
+        "src20-balance-read"
+      );
+
+      // Pack r/s/v into 65-byte Ethereum signature (ecrecover format)
+      const sig = signedMsg.signature;
+      if (!sig?.r || !sig?.s || sig.v === undefined) {
+        throw new Error("Incomplete signature from Fireblocks (missing r, s, or v)");
+      }
+      const v = sig.v < 27 ? sig.v + 27 : sig.v;
+      const rPadded = pad(`0x${sig.r.replace(/^0x/, "")}` as Hex, { size: 32 });
+      const sPadded = pad(`0x${sig.s.replace(/^0x/, "")}` as Hex, { size: 32 });
+      const packedSignature = concat([rPadded, sPadded, toHex(v, { size: 1 })]);
+
+      const publicClient = this.blockchainApiService.createPublicClient();
+      const rawBalance = await this.blockchainApiService.readSrc20BalanceSigned(
+        publicClient,
+        contractAddress as Address,
+        ownerAddress,
+        packedSignature,
+        expiry
+      );
+
+      const balance = Number(rawBalance) / 10 ** 18;
+      return { success: true, balance };
+    } catch (error) {
+      this.logger.error(`Error fetching SRC-20 balance: ${formatErrorMessage(error)}`);
+      return { success: false, error: formatErrorMessage(error) };
+    }
+  };
+
+  /**
+   * Submits an encrypted SRC-20 shielded transfer (Seismic type-0x4A transaction).
+   *
+   * Flow:
+   * 1. Derive encryptionSk (cached after first call)
+   * 2. Create a ShieldedWalletClient using encryptionSk as both the signing key
+   *    and the calldata encryption key
+   * 3. seismic-viem encrypts transfer(to, amount) calldata via AES-256-GCM
+   *    using ECDH(encryptionSk, TEE pubkey) + HKDF, then broadcasts the type-0x4A tx
+   *
+   * @param vaultId         - Fireblocks vault account ID
+   * @param recipient       - Transfer recipient address
+   * @param amount          - Transfer amount in whole token units
+   * @param contractAddress - SRC-20 contract address
+   * @param note            - Optional label for the Fireblocks activity log
+   */
+  public createShieldedTransaction = async (
+    vaultId: string,
+    recipient: string,
+    amount: number,
+    contractAddress: string,
+    note?: string
+  ): Promise<CreateTransactionResponse> => {
+    try {
+      const encryptionSk = await this.deriveEncryptionKey(vaultId);
+
+      // encryptionSk serves as both the signing key and the seismic-viem encryption key.
+      // The resulting Seismic address = privateKeyToAccount(encryptionSk).address.
+      const client = await this.blockchainApiService.createShieldedClient(
+        encryptionSk,
+        encryptionSk
+      );
+
+      const amountBigInt = BigInt(Math.round(amount * 10 ** 18));
+      const txHash = await this.blockchainApiService.submitShieldedTransfer(
+        client,
+        contractAddress as Address,
+        recipient as Address,
+        amountBigInt
+      );
+
+      this.logger.info(
+        `Shielded transfer submitted | vault:${vaultId} | txHash:${txHash}` +
+          (note ? ` | note:${note}` : "")
+      );
+      return { success: true, txHash };
+    } catch (error: unknown) {
+      this.logger.error(`Failed to create shielded transaction: ${formatErrorMessage(error)}`);
+      return { success: false, error: formatErrorMessage(error) };
+    }
+  };
+
+  /**
+   * Gracefully shutdown the SDK.
+   * Zeroes encryptionSk values in memory before clearing vault data.
    *
    * @returns Promise that resolves when shutdown is complete
    */
   public async shutdown(): Promise<void> {
     this.logger.info("Shutting down MainSDK...");
+    // Zero encryptionSk values before clearing — defense-in-depth against memory scraping
+    for (const vaultData of this.vaultData.values()) {
+      if (vaultData.encryptionSk) {
+        vaultData.encryptionSk = "0".repeat(vaultData.encryptionSk.length);
+      }
+    }
     this.vaultData.clear();
     this.logger.info("MainSDK shutdown complete");
   }
