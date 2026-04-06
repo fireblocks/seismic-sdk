@@ -16,6 +16,7 @@ import {
   TransactionType,
   VaultData,
 } from "./types/index.js";
+import { SdkApiError } from "./types/errors.js";
 import {
   Logger,
   validateApiCredentials,
@@ -312,7 +313,7 @@ export class MainSDK {
 
       // RLP-encode the signed transaction
       const signedRlp = toRlp([
-        tx.nonce === "0x0" || tx.nonce === "0x" ? "0x" : tx.nonce as Hex,
+        tx.nonce === "0x0" || tx.nonce === "0x" ? "0x" : (tx.nonce as Hex),
         tx.gasPrice as Hex,
         tx.gas as Hex,
         tx.to as Hex,
@@ -326,7 +327,14 @@ export class MainSDK {
       const result = await this.blockchainApiService.broadcastTransaction(signedRlp);
       return result;
     } catch (error) {
-      throw new Error(`Failed to build, sign or send transaction: ${formatErrorMessage(error)}`);
+      if (error instanceof SdkApiError) throw error;
+      throw new SdkApiError(
+        `Failed to build, sign or send transaction: ${formatErrorMessage(error)}`,
+        500,
+        "TX_FAILED",
+        undefined,
+        "MainSDK"
+      );
     }
   };
 
@@ -483,7 +491,12 @@ export class MainSDK {
     change: number = 0,
     addressIndex: number = 0
   ): Promise<string> => {
-    return await this.fireblocksService.getAssetPublicKey(vaultAccountId, assetId, change, addressIndex);
+    return await this.fireblocksService.getAssetPublicKey(
+      vaultAccountId,
+      assetId,
+      change,
+      addressIndex
+    );
   };
 
   /**

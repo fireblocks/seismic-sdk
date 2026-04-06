@@ -6,6 +6,7 @@ import {
 } from "@fireblocks/ts-sdk";
 import { FireblocksSigner } from "./fireblocksSigner.js";
 import { FireblocksConfig } from "../types/index.js";
+import { SdkApiError } from "../types/errors.js";
 import {
   Logger,
   getPublicKeyForDerivationPathAndAlgorithm,
@@ -530,8 +531,10 @@ export class FireblocksService {
         purpose || "sign-transaction"
       );
     } catch (error) {
-      this.logger.error(`Failed to sign transaction: ${formatErrorMessage(error)}`);
-      throw new Error(`Failed to sign transaction: ${formatErrorMessage(error)}`);
+      if (error instanceof SdkApiError) throw error;
+      const msg = formatErrorMessage(error);
+      this.logger.error(`Failed to sign transaction: ${msg}`);
+      throw new SdkApiError(msg, 500, "SIGN_FAILED", undefined, "FireblocksService");
     }
   };
 }

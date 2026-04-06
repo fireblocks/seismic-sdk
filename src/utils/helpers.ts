@@ -231,16 +231,25 @@ const safeStringify = (obj: unknown): string => {
 
 // Format error messages consistently
 export const formatErrorMessage = (error: unknown): string => {
-  if (error instanceof Error) {
-    // Axios/SDK errors: prefer the response body if present
-    const maybeAxios = error as { response?: { data?: unknown } };
-    if (maybeAxios.response?.data) {
-      return safeStringify(maybeAxios.response.data);
-    }
-    return error.message;
-  }
   if (typeof error === "object" && error !== null) {
-    return safeStringify(error);
+    // Axios / Fireblocks SDK errors: only return the response body
+    const maybeAxios = error as {
+      response?: { data?: { message?: string; code?: unknown } };
+      message?: string;
+    };
+    if (maybeAxios.response?.data) {
+      const { message, code } = maybeAxios.response.data;
+      return code !== undefined
+        ? `${message} (code ${code})`
+        : (message ?? safeStringify(maybeAxios.response.data));
+    }
+    if (error instanceof Error) return error.message;
+    // Plain object without response — stringify but omit request/response noise
+    const obj = error as Record<string, unknown>;
+    const rest = Object.fromEntries(
+      Object.entries(obj).filter(([k]) => k !== "request" && k !== "response")
+    );
+    return safeStringify(Object.keys(rest).length ? rest : obj);
   }
   return String(error);
 };
