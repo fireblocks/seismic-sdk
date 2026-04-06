@@ -51,7 +51,7 @@ export const getSwaggerSpec = (): ReturnType<typeof swaggerJsdoc> => {
           { name: "Vault", description: "Vault account management (legacy)" },
         ],
       },
-      apis: ["./dist/api/router.js", "./dist/api/controllers/*.js", "./dist/routes/*.js"],
+      apis: ["./dist/server.js", "./dist/api/router.js", "./dist/api/controllers/*.js", "./dist/routes/*.js"],
     };
 
     cachedSwaggerSpec = swaggerJsdoc(options);
