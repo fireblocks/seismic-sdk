@@ -10,8 +10,13 @@ import {
   SignedMessage,
 } from "@fireblocks/ts-sdk";
 import { type Hex, concat, pad, toHex } from "viem";
-import { derivationPath, formatErrorMessage } from "../utils/index.js";
+import {
+  derivationPath,
+  formatErrorMessage,
+  FIREBLOCKS_RAW_SIGN_ASSET_ID,
+} from "../utils/index.js";
 import { Logger } from "../utils/logger.js";
+import { SdkApiError } from "../types/errors.js";
 
 export class FireblocksSigner {
   private readonly logger = new Logger("services:fireblocks-signer");
@@ -27,35 +32,53 @@ export class FireblocksSigner {
   }
 
   /**
-   * Builds the base RAW signing transaction payload.
-   * `rawMessageData` (including content and derivation path) is set separately
-   * in rawSign() so each call can provide its own message and vault-specific path.
+   * Builds the RAW signing transaction payload.
+   *
+   * Fireblocks has two mutually exclusive RAW signing modes:
+   *
+   * **Testnet** — "natively supported asset" mode:
+   *   Uses `assetId: "BTC_TEST"` (coin type 1) + `source.id`. Fireblocks infers the
+   *   key path from the asset + vault account. No `derivationPath` in the message.
+   *
+   * **Mainnet** — "unsupported asset" mode:
+   *   No `assetId`, `source` has no `id`. The full BIP-44 path (coin type 60) is
+   *   embedded in the message's `derivationPath`. Requires `algorithm` in rawMessageData.
    */
   createTransactionPayload = (
     vaultAccountId: string,
     hexContent: string,
     purpose: string
   ): TransactionRequest => {
+    const note = `[Seismic SDK] vault:${vaultAccountId} | ${purpose} | ${new Date().toISOString()}`;
+
+    if (this.coinType === 1) {
+      // Testnet: BTC_TEST asset uses m/44'/1'/vaultId'/0/0 — matches Seismic testnet key
+      return {
+        note,
+        assetId: FIREBLOCKS_RAW_SIGN_ASSET_ID,
+        source: { type: TransferPeerPathType.VaultAccount, id: vaultAccountId },
+        operation: TransactionOperation.Raw,
+        extraParameters: {
+          rawMessageData: {
+            messages: [{ content: hexContent }],
+          },
+        },
+      };
+    }
+
+    // Mainnet: explicit derivation path (coin type 60) — no assetId, no source.id
     return {
-      note: `[Seismic SDK] vault:${vaultAccountId} | ${purpose} | ${new Date().toISOString()}`,
-      // BTC_TEST is required by Fireblocks for RAW signing operations
-      // The actual key selection is done via the derivation path in rawMessageData.
-      assetId: "BTC_TEST",
-      source: {
-        type: TransferPeerPathType.VaultAccount,
-        id: vaultAccountId,
-      },
+      note,
+      source: { type: TransferPeerPathType.VaultAccount },
       operation: TransactionOperation.Raw,
       extraParameters: {
         rawMessageData: {
           messages: [
             {
               content: hexContent,
-              // BIP44 EVM path: m/44'/60'/{vaultId}'/0/0
-              // coinType 60 = Ethereum and all EVM-compatible chains
               derivationPath: [
                 derivationPath.purpose, // 44
-                this.coinType, // 60 mainnet, 1 testnet
+                this.coinType, // 60
                 parseInt(vaultAccountId), // vault account index
                 derivationPath.change, // 0
                 derivationPath.addressIndex, // 0
@@ -159,10 +182,10 @@ export class FireblocksSigner {
 
       return signedMessage;
     } catch (error) {
-      this.logger.error(
-        `RAW sign failed | vault:${vaultAccountId} | purpose:${purpose} | ${formatErrorMessage(error)}`
-      );
-      throw new Error(`Error in rawSign: ${formatErrorMessage(error)}`);
+      if (error instanceof SdkApiError) throw error;
+      const msg = formatErrorMessage(error);
+      this.logger.error(`RAW sign failed | vault:${vaultAccountId} | purpose:${purpose} | ${msg}`);
+      throw new SdkApiError(msg, 500, "RAW_SIGN_FAILED", undefined, "FireblocksSigner");
     }
   };
 
