@@ -34,7 +34,7 @@ export const getSwaggerSpec = (): ReturnType<typeof swaggerJsdoc> => {
           },
         ],
         tags: [
-          { name: "Health", description: "Service health checks" },
+          { name: "Health", description: "Service health check" },
           {
             name: "Balance",
             description: "Query balances by address",
@@ -48,6 +48,7 @@ export const getSwaggerSpec = (): ReturnType<typeof swaggerJsdoc> => {
             name: "Transaction History",
             description: "Retrieve past transaction records and details",
           },
+          { name: "Vault", description: "Vault account management (legacy)" },
         ],
       },
       apis: ["./dist/api/router.js", "./dist/api/controllers/*.js", "./dist/routes/*.js"],
