@@ -31,6 +31,7 @@ const startServer = () => {
     apiKey: config.FIREBLOCKS.apiKey || "",
     apiSecret: config.FIREBLOCKS.secretKey || "",
     basePath: (config.FIREBLOCKS.basePath as BasePath) || BasePath.US,
+    testnet: config.TESTNET,
   });
 
   // Mount API routes

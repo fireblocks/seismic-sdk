@@ -1,8 +1,7 @@
 import {
   Fireblocks,
-  SignedMessageSignature,
+  SignedMessage,
   TransactionRequest,
-  SignedMessageAlgorithmEnum,
   VaultWalletAddress,
 } from "@fireblocks/ts-sdk";
 import { FireblocksSigner } from "./fireblocksSigner.js";
@@ -78,7 +77,7 @@ export class FireblocksService {
     const { apiKey, secretKey, basePath } = getFinalFireblocksSDKParams(fireblocksConfig);
     this.fireblocksSDK = new Fireblocks({ apiKey, secretKey, basePath });
     this.testnet = fireblocksConfig?.testnet || false;
-    this.fireblocksSigner = new FireblocksSigner(this.fireblocksSDK);
+    this.fireblocksSigner = new FireblocksSigner(this.fireblocksSDK, this.testnet);
   }
 
   /**
@@ -107,7 +106,8 @@ export class FireblocksService {
     try {
       const publicKey = await getPublicKeyForDerivationPathAndAlgorithm(
         this.fireblocksSDK,
-        vaultID.toString()
+        vaultID.toString(),
+        this.testnet
       );
 
       return publicKey;
@@ -375,12 +375,7 @@ export class FireblocksService {
    */
   public broadcastTransaction = async (
     transactionPayload: TransactionRequest
-  ): Promise<{
-    signature: SignedMessageSignature;
-    content?: string;
-    publicKey?: string;
-    algorithm?: SignedMessageAlgorithmEnum;
-  } | null> => {
+  ): Promise<SignedMessage | null> => {
     try {
       const transactionResponse = await this.fireblocksSDK.transactions.createTransaction({
         transactionRequest: transactionPayload,
@@ -526,18 +521,16 @@ export class FireblocksService {
   public signTransaction = async (
     content: string,
     vaultAccountId: string,
-    txNote?: string
-  ): Promise<SignedMessageSignature> => {
+    purpose?: string
+  ): Promise<SignedMessage> => {
     try {
-      const signature = await this.fireblocksSigner.rawSign(
+      return await this.fireblocksSigner.rawSign(
         content,
         vaultAccountId,
-        txNote || "",
-        this.testnet
+        purpose || "sign-transaction"
       );
-      return signature;
     } catch (error) {
-      console.error("Error in signTransaction:", formatErrorMessage(error));
+      this.logger.error(`Failed to sign transaction: ${formatErrorMessage(error)}`);
       throw new Error(`Failed to sign transaction: ${formatErrorMessage(error)}`);
     }
   };

@@ -4,13 +4,14 @@ export interface Config {
   PORT: number;
   FIREBLOCKS: FireblocksSDKConfig;
   APP_NAME: string;
+  TESTNET: boolean;
 }
 
 export interface CustomConfig {
   PORT?: number;
   FIREBLOCKS?: Partial<FireblocksSDKConfig>;
   APP_NAME?: string;
+  TESTNET?: boolean;
 }
 
 export { BasePath };
-
