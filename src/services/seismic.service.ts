@@ -29,15 +29,29 @@ import {
 } from "../utils/index.js";
 import {
   BroadcastResult,
-  GetTransactionHistoryParams,
   GetTransactionHistoryFromIndexerOpts,
   TokenType,
   Transaction,
   UnsignedTransaction,
   TransactionType,
 } from "../types/index.js";
+
+type EthLog = {
+  address: string;
+  topics: string[];
+  data: string;
+  blockNumber: string;
+  transactionHash: string;
+  logIndex: string;
+};
 import axiosInstance from "../utils/httpClient.js";
-import { chain_info, SEISMIC_CHAIN_ID } from "../utils/constants.js";
+import {
+  chain_info,
+  SEISMIC_CHAIN_ID,
+  ERC20_SELECTORS,
+  DEFAULT_TOKEN_DECIMALS,
+  ERC20_TRANSFER_TOPIC,
+} from "../utils/constants.js";
 import { SRC20Abi } from "../seismic/abi.js";
 
 type SeismicClient = ShieldedWalletClient<Transport, Chain>;
@@ -49,14 +63,12 @@ export class BlockchainApiService {
   private readonly rpcUrl: string;
   private readonly chainId: number;
   private readonly errorHandler = new ErrorHandler("blockchain-api", this.logger);
-  private network: "mainnet" | "testnet";
 
   constructor(testnet: boolean = false) {
     this.axiosClient = axiosInstance;
     this.rpcUrl =
       process.env.RPC_URL || (testnet ? api_constants.testnet_rpc : api_constants.mainnet_rpc);
     this.chainId = testnet ? SEISMIC_CHAIN_ID.testnet : SEISMIC_CHAIN_ID.testnet;
-    this.network = testnet ? "testnet" : "mainnet";
   }
 
   public getChainId = (): number => this.chainId;
@@ -95,7 +107,7 @@ export class BlockchainApiService {
       }
 
       const hex = pubKey.replace(/^0x/, "");
-      const point = secp256k1.ProjectivePoint.fromHex(hex);
+      const point = secp256k1.Point.fromHex(hex);
       const uncompressedHex = point.toHex(false).slice(2); // strip '04' prefix
       const hash = keccak256(`0x${uncompressedHex}` as Hex);
       return `0x${hash.slice(-40)}`;
@@ -137,12 +149,59 @@ export class BlockchainApiService {
    * @param holderAddress   - The address whose balance to query
    * @param contractAddress - ERC-20 contract address
    */
+  /**
+   * Fetches name, symbol, decimals, and totalSupply from a standard ERC-20 contract.
+   * Any field that fails to decode (e.g. non-standard contract) is returned as null.
+   */
+  public getErc20Info = async (
+    contractAddress: string
+  ): Promise<{
+    name: string | null;
+    symbol: string | null;
+    decimals: number | null;
+    totalSupply: string | null;
+  }> => {
+    const call = (selector: string) =>
+      this.jsonRpc<string>("eth_call", [{ to: contractAddress, data: selector }, "latest"]).catch(
+        () => null
+      );
+
+    const [nameHex, symbolHex, decimalsHex, totalSupplyHex] = await Promise.all([
+      call(ERC20_SELECTORS.name),
+      call(ERC20_SELECTORS.symbol),
+      call(ERC20_SELECTORS.decimals),
+      call(ERC20_SELECTORS.totalSupply),
+    ]);
+
+    const decodeString = (hex: string | null): string | null => {
+      if (!hex || hex === "0x") return null;
+      try {
+        // ABI-encoded string: offset(32) + length(32) + data
+        const data = hex.slice(2);
+        const offset = parseInt(data.slice(0, 64), 16) * 2;
+        const length = parseInt(data.slice(offset, offset + 64), 16) * 2;
+        const strHex = data.slice(offset + 64, offset + 64 + length);
+        return Buffer.from(strHex, "hex").toString("utf8");
+      } catch {
+        return null;
+      }
+    };
+
+    return {
+      name: decodeString(nameHex),
+      symbol: decodeString(symbolHex),
+      decimals:
+        decimalsHex && decimalsHex !== "0x" ? parseInt(decimalsHex, 16) : DEFAULT_TOKEN_DECIMALS,
+      totalSupply:
+        totalSupplyHex && totalSupplyHex !== "0x" ? BigInt(totalSupplyHex).toString() : null,
+    };
+  };
+
   public readErc20Balance = async (
     holderAddress: string,
     contractAddress: string
   ): Promise<bigint> => {
-    // balanceOf(address) selector = 0x70a08231, padded to 32 bytes
-    const data = "0x70a08231" + holderAddress.slice(2).toLowerCase().padStart(64, "0");
+    const data = ERC20_SELECTORS.balanceOf + holderAddress.slice(2).toLowerCase().padStart(64, "0");
 
     const result = await this.jsonRpc<string>("eth_call", [
       { to: contractAddress, data },
@@ -305,28 +364,110 @@ export class BlockchainApiService {
   };
 
   /**
-   * Retrieves transaction history for a Seismic address.
+   * Retrieves ERC-20 / SRC-20 Transfer event history for a Seismic address.
    *
-   * Seismic testnet does not currently expose a full transaction history indexer.
-   * Returns an empty array; integrate a block explorer API when available.
+   * Uses eth_getLogs with the standard Transfer(address,address,uint256) topic.
+   * Queries both sent (topics[1]=address) and received (topics[2]=address) logs
+   * in parallel, deduplicates, fetches block timestamps, and returns sorted results.
+   *
+   * Note: native ETH transfers produce no logs and are not included.
+   * Note: SRC-20 transfer events may not be emitted publicly (shielded by design).
    */
   public getTransactionHistory = async (
-    params: GetTransactionHistoryParams
-  ): Promise<Transaction[]> => {
-    if (
-      "address" in params &&
-      !validateAddress((params as GetTransactionHistoryFromIndexerOpts).address)
-    ) {
+    params: GetTransactionHistoryFromIndexerOpts
+  ): Promise<{ transactions: Transaction[]; fromBlock: string; toBlock: string }> => {
+    const { address, contracts, limit, offset = 0 } = params;
+
+    if (!validateAddress(address)) {
       throw this.errorHandler.handleApiError(
         new Error("Invalid address provided"),
-        "fetching transactions history"
+        "fetching transaction history"
       );
     }
 
-    this.logger.debug(
-      `getTransactionHistory | ${this.network} | no history indexer on Seismic testnet`
+    // Seismic nodes cap eth_getLogs at 100,000 blocks per query and produce
+    // multiple blocks per second. Pin both fromBlock and toBlock to the same
+    // snapshot so the range can't drift over the limit between calls.
+    let fromBlock = params.fromBlock;
+    let toBlock = params.toBlock;
+    if (!fromBlock || !toBlock) {
+      const latestHex = await this.jsonRpc<string>("eth_blockNumber", []);
+      const latest = parseInt(latestHex, 16);
+      if (!toBlock) toBlock = latestHex;
+      if (!fromBlock) {
+        const from = Math.max(0, latest - 99_000); // 99,000-block window, safely under the 100k limit
+        fromBlock = `0x${from.toString(16)}`;
+      }
+    }
+
+    const paddedAddress = "0x" + address.slice(2).toLowerCase().padStart(64, "0");
+
+    const baseFilter = {
+      fromBlock,
+      toBlock,
+      ...(contracts?.length ? { address: contracts } : {}),
+    };
+
+    const [sentLogs, receivedLogs] = await Promise.all([
+      this.jsonRpc<EthLog[]>("eth_getLogs", [
+        { ...baseFilter, topics: [ERC20_TRANSFER_TOPIC, paddedAddress, null] },
+      ]),
+      this.jsonRpc<EthLog[]>("eth_getLogs", [
+        { ...baseFilter, topics: [ERC20_TRANSFER_TOPIC, null, paddedAddress] },
+      ]),
+    ]);
+
+    // Deduplicate by transactionHash + logIndex (e.g. self-transfers)
+    const seen = new Set<string>();
+    const allLogs = [...sentLogs, ...receivedLogs].filter((log) => {
+      const key = `${log.transactionHash}-${log.logIndex}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
+    // Sort by block descending before slicing
+    allLogs.sort((a, b) => parseInt(b.blockNumber, 16) - parseInt(a.blockNumber, 16));
+
+    const sliced =
+      limit !== undefined ? allLogs.slice(offset, offset + limit) : allLogs.slice(offset);
+
+    // Fetch timestamps for unique blocks in the result set
+    const uniqueBlocks = [...new Set(sliced.map((l) => l.blockNumber))];
+    const blockTimestamps = new Map<string, number>();
+    await Promise.all(
+      uniqueBlocks.map(async (blockNum) => {
+        const block = await this.jsonRpc<{ timestamp: string } | null>("eth_getBlockByNumber", [
+          blockNum,
+          false,
+        ]);
+        if (block) blockTimestamps.set(blockNum, parseInt(block.timestamp, 16));
+      })
     );
-    return [];
+
+    const transactions = sliced.map((log) => ({
+      type: TransactionType.FungibleToken,
+      tokenInfo: { tokenID: log.address, tokenName: log.address, decimals: 0 },
+      sender: "0x" + log.topics[1].slice(-40),
+      recipient: "0x" + log.topics[2].slice(-40),
+      amount: Number(BigInt(log.data || "0x0")),
+      transaction_hash: log.transactionHash,
+      timestamp: blockTimestamps.get(log.blockNumber),
+      success: true,
+    }));
+
+    return { transactions, fromBlock, toBlock };
+  };
+
+  /**
+   * Fetches a transaction by hash using eth_getTransactionByHash.
+   * Returns null if the transaction is not found.
+   */
+  public getTransactionByHash = async (txHash: string): Promise<Record<string, unknown> | null> => {
+    const result = await this.jsonRpc<Record<string, unknown> | null>("eth_getTransactionByHash", [
+      txHash,
+    ]);
+    return result;
   };
 
   // ─── Seismic shielded operations (seismic-viem) ──────────────────────────────

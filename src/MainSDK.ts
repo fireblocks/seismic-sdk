@@ -1,4 +1,4 @@
-import { type Hex, type Address, pad, concat, toHex, toRlp, numberToHex } from "viem";
+import { type Hex, type Address, pad, concat, toHex, toRlp, numberToHex, keccak256 } from "viem";
 import { FireblocksService, BlockchainApiService } from "./services/index.js";
 import {
   BroadcastResult,
@@ -7,8 +7,6 @@ import {
   FireblocksConfig,
   GetFtBalancesResponse,
   GetNativeBalanceResponse,
-  GetTransactionHistoryParams,
-  GetTransactionHistoryResponse,
   TokenType,
   TransactionType,
   VaultData,
@@ -21,6 +19,8 @@ import {
   formatErrorMessage,
   unitsToCoin,
   SEED_MESSAGE_HEX,
+  ERC20_SELECTORS,
+  DEFAULT_TOKEN_DECIMALS,
 } from "./utils/index.js";
 import { deriveKeyFromSignature } from "./crypto/key-derivation.js";
 import { buildBalanceReadMessage, createExpiry } from "./seismic/signature.js";
@@ -120,49 +120,31 @@ export class MainSDK {
     return entry;
   }
 
-  /**
-   * Get transaction history for a vault account
-   *
-   * Retrieves transaction history based on the provided filters using the blockchain API service.
-   *
-   * @param vaultAccountId - The Fireblocks vault account ID
-   * @param options - Optional filters for transaction history
-   * @returns Promise resolving to transaction history response
-   *
-   * @example
-   * ```typescript
-   * const history = await sdk.getTransactionHistory('vault-123', {
-   *   limit: 10,
-   * });
-   * console.log(`Found ${history.data.length} transactions`);
-   * ```
-   */
-  public async getTransactionHistory(
-    vaultAccountId: string,
-    options: { limit?: number; offset?: number; order?: "ASC" | "DESC" } = {}
-  ): Promise<GetTransactionHistoryResponse> {
-    try {
-      this.logger.debug(`Getting transaction history for vault ${vaultAccountId}`, options);
+  public async getErc20Info(contractAddress: string) {
+    return this.blockchainApiService.getErc20Info(contractAddress);
+  }
 
-      const { address } = await this.ensureVaultData(vaultAccountId);
+  public async getTransactionByHash(txHash: string): Promise<Record<string, unknown> | null> {
+    return this.blockchainApiService.getTransactionByHash(txHash);
+  }
 
-      const params = {
-        address,
-        limit: options.limit,
-        offset: options.offset,
-      } as GetTransactionHistoryParams;
-
-      const transactions = await this.blockchainApiService.getTransactionHistory(params);
-
-      if (options.order === "ASC") {
-        transactions.reverse();
-      }
-
-      return { success: true, data: transactions };
-    } catch (error) {
-      this.logger.error(`Error fetching transaction history: ${formatErrorMessage(error)}`);
-      return { success: false, error: formatErrorMessage(error) };
-    }
+  public async getTransactionHistory(params: {
+    vaultId: string;
+    fromBlock?: string;
+    toBlock?: string;
+    contracts?: string[];
+    limit?: number;
+    offset?: number;
+  }) {
+    const vaultData = await this.ensureVaultData(params.vaultId);
+    return this.blockchainApiService.getTransactionHistory({
+      address: vaultData.address,
+      fromBlock: params.fromBlock,
+      toBlock: params.toBlock,
+      contracts: params.contracts,
+      limit: params.limit,
+      offset: params.offset,
+    });
   }
 
   /**
@@ -354,6 +336,105 @@ export class MainSDK {
       return { success: true, txHash: result.txid };
     } catch (error: unknown) {
       this.logger.error(`Failed to create native transaction: ${formatErrorMessage(error)}`);
+      return { success: false, error: formatErrorMessage(error) };
+    }
+  };
+
+  /**
+   * Transfers a standard ERC-20 token from a vault to a recipient.
+   * Encodes transfer(address,uint256) calldata, signs the EIP-155 hash via Fireblocks RAW, and broadcasts.
+   *
+   * @param vaultAccountId  - Source Fireblocks vault account ID
+   * @param recipientAddress - Destination EVM address
+   * @param amount          - Amount in whole token units (e.g. 100 for 100 tokens with 18 decimals)
+   * @param contractAddress - ERC-20 contract address
+   * @param decimals        - Token decimals (default: 18)
+   * @param note            - Optional label on the Fireblocks signing request
+   */
+  public createErc20Transaction = async (
+    vaultAccountId: string,
+    recipientAddress: string,
+    amount: number,
+    contractAddress: string,
+    decimals?: number,
+    note?: string
+  ): Promise<CreateTransactionResponse> => {
+    try {
+      const vaultData = await this.ensureVaultData(vaultAccountId);
+
+      const resolvedDecimals =
+        decimals ??
+        (await this.blockchainApiService.getErc20Info(contractAddress)).decimals ??
+        DEFAULT_TOKEN_DECIMALS;
+      const amountWei = BigInt(Math.round(amount * 10 ** resolvedDecimals));
+
+      // Encode transfer(address,uint256) calldata
+      const paddedTo = recipientAddress.slice(2).toLowerCase().padStart(64, "0");
+      const paddedAmount = amountWei.toString(16).padStart(64, "0");
+      const calldata = `${ERC20_SELECTORS.transfer}${paddedTo}${paddedAmount}` as Hex;
+
+      // Build unsigned tx: to=contract, value=0, data=calldata
+      const [hexNonce, hexGasPrice] = await Promise.all([
+        this.blockchainApiService["jsonRpc"]<string>("eth_getTransactionCount", [
+          vaultData.address,
+          "latest",
+        ]),
+        this.blockchainApiService["jsonRpc"]<string>("eth_gasPrice", []),
+      ]);
+
+      const nonce = parseInt(hexNonce, 16);
+      const gasPrice = BigInt(hexGasPrice);
+      const gasLimit = 100_000n; // ERC-20 transfer gas
+      const chainId = this.blockchainApiService.getChainId();
+
+      const rlpEncoded = toRlp([
+        nonce === 0 ? "0x" : numberToHex(nonce),
+        numberToHex(gasPrice),
+        numberToHex(gasLimit),
+        contractAddress as Hex,
+        "0x",
+        calldata,
+        numberToHex(chainId),
+        "0x",
+        "0x",
+      ]);
+      const signingHash = keccak256(rlpEncoded);
+
+      const signedMsg = await this.fireblocksService.signTransaction(
+        signingHash.slice(2),
+        vaultAccountId,
+        note || "erc20-transfer"
+      );
+
+      const sig = signedMsg.signature;
+      if (!sig?.r || !sig?.s || sig.v === undefined) {
+        throw new Error("Incomplete signature from Fireblocks");
+      }
+
+      const recoveryBit = sig.v < 27 ? sig.v : sig.v - 27;
+      const v = BigInt(chainId) * 2n + 35n + BigInt(recoveryBit);
+      const r = `0x${sig.r.replace(/^0x/, "").padStart(64, "0")}` as Hex;
+      const s = `0x${sig.s.replace(/^0x/, "").padStart(64, "0")}` as Hex;
+
+      const signedRlp = toRlp([
+        nonce === 0 ? "0x" : numberToHex(nonce),
+        numberToHex(gasPrice),
+        numberToHex(gasLimit),
+        contractAddress as Hex,
+        "0x",
+        calldata,
+        numberToHex(v),
+        r,
+        s,
+      ]);
+
+      const result = await this.blockchainApiService.broadcastTransaction(signedRlp);
+      if (result.err) {
+        return { success: false, error: formatErrorMessage(result.err) };
+      }
+      return { success: true, txHash: result.txid };
+    } catch (error) {
+      this.logger.error(`Failed to create ERC-20 transaction: ${formatErrorMessage(error)}`);
       return { success: false, error: formatErrorMessage(error) };
     }
   };

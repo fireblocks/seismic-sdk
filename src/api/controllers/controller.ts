@@ -97,17 +97,36 @@ export class ApiController {
   };
 
   /**
-   * GET /api/:vaultId/transactions?limit=N&offset=N
-   * Returns transaction history for the vault.
+   * GET /api/:vaultId/transactions
+   * Returns ERC-20/SRC-20 Transfer event history for the vault's Seismic address.
    */
   public getTransactionHistory = async (req: Request, res: Response) => {
     const { vaultId } = req.params;
-    const limit = req.query.limit ? parseInt(req.query.limit as string) : undefined;
-    const offset = req.query.offset ? parseInt(req.query.offset as string) : undefined;
-    const order = req.query.order as "ASC" | "DESC" | undefined;
+    const { fromBlock, toBlock, contracts, limit, offset } = req.query as Record<string, string>;
     try {
-      const result = await this.sdk.getTransactionHistory(vaultId, { limit, offset, order });
-      res.status(200).json(result);
+      const contractList = contracts
+        ? Array.isArray(contracts)
+          ? (contracts as string[])
+          : contracts.split(",").map((s) => s.trim())
+        : undefined;
+      const result = await this.sdk.getTransactionHistory({
+        vaultId,
+        fromBlock,
+        toBlock,
+        contracts: contractList,
+        limit: limit !== undefined ? parseInt(limit) : undefined,
+        offset: offset !== undefined ? parseInt(offset) : undefined,
+      });
+      res.status(200).json({
+        success: true,
+        data: result.transactions,
+        meta: {
+          scannedFromBlock: result.fromBlock,
+          scannedToBlock: result.toBlock,
+          count: result.transactions.length,
+          note: "Only ERC-20/SRC-20 Transfer events are returned. Native ETH transfers produce no logs and cannot be retrieved via eth_getLogs.",
+        },
+      });
     } catch (error) {
       this.handleError(error, res, "getTransactionHistory");
     }
@@ -115,15 +134,17 @@ export class ApiController {
 
   /**
    * GET /api/:vaultId/transactions/:txHash
-   * Returns details for a single transaction.
+   * Returns a transaction by hash from the Seismic RPC.
    */
   public getTransaction = async (req: Request, res: Response) => {
-    const { vaultId, txHash } = req.params;
+    const { txHash } = req.params;
     try {
-      res.status(200).json({
-        success: true,
-        data: { vaultId, txHash, note: "Individual transaction lookup not yet implemented" },
-      });
+      const tx = await this.sdk.getTransactionByHash(txHash);
+      if (!tx) {
+        res.status(404).json({ success: false, error: `Transaction ${txHash} not found` });
+        return;
+      }
+      res.status(200).json({ success: true, data: tx });
     } catch (error) {
       this.handleError(error, res, "getTransaction");
     }
@@ -135,14 +156,16 @@ export class ApiController {
    */
   public transfer = async (req: Request, res: Response) => {
     const { vaultId } = req.params;
-    const { type, recipient, destinationVaultId, amount, contractAddress, note } = req.body as {
-      type: "ETH" | "ERC20" | "SRC20";
-      recipient?: string;
-      destinationVaultId?: string;
-      amount: number;
-      contractAddress?: string;
-      note?: string;
-    };
+    const { type, recipient, destinationVaultId, amount, contractAddress, decimals, note } =
+      req.body as {
+        type: "ETH" | "ERC20" | "SRC20";
+        recipient?: string;
+        destinationVaultId?: string;
+        amount: number;
+        contractAddress?: string;
+        decimals?: number;
+        note?: string;
+      };
     try {
       const to = destinationVaultId
         ? await this.sdk.getSeismicAddress(destinationVaultId)
@@ -158,13 +181,34 @@ export class ApiController {
           note
         );
       } else if (type === "ERC20") {
-        result = await this.sdk.createFTTransaction(vaultId, to, amount, "SRC20" as never, note);
+        result = await this.sdk.createErc20Transaction(
+          vaultId,
+          to,
+          amount,
+          contractAddress!,
+          decimals,
+          note
+        );
       } else {
         result = await this.sdk.createNativeTransaction(vaultId, to, amount, false, note);
       }
       res.status(200).json(result);
     } catch (error) {
       this.handleError(error, res, "transfer");
+    }
+  };
+
+  /**
+   * GET /api/contracts/:contractAddress
+   * Returns ERC-20 metadata: name, symbol, decimals, totalSupply.
+   */
+  public getContractInfo = async (req: Request, res: Response) => {
+    const { contractAddress } = req.params;
+    try {
+      const info = await this.sdk.getErc20Info(contractAddress);
+      res.status(200).json({ success: true, data: { contractAddress, ...info } });
+    } catch (error) {
+      this.handleError(error, res, "getContractInfo");
     }
   };
 

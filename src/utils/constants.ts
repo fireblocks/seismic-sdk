@@ -66,6 +66,31 @@ export const SEED_MESSAGE_HEX: `0x${string}` = keccak256(
   new TextEncoder().encode("Seismic Fireblocks Encryption Key Derivation")
 );
 
+/**
+ * Default token decimals for ERC-20 contracts that don't implement decimals()
+ * or when the caller doesn't specify. 18 is the ERC-20 standard default.
+ */
+export const DEFAULT_TOKEN_DECIMALS = 18;
+
+/**
+ * Standard ERC-20 function selectors (keccak256 of the function signature, first 4 bytes).
+ * Used for raw eth_call construction without importing a full ABI.
+ */
+/**
+ * ERC-20 Transfer event topic: keccak256("Transfer(address,address,uint256)")
+ * Used as topics[0] filter in eth_getLogs to find token transfer events.
+ */
+export const ERC20_TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+
+export const ERC20_SELECTORS = {
+  name: "0x06fdde03", // name()
+  symbol: "0x95d89b41", // symbol()
+  decimals: "0x313ce567", // decimals()
+  totalSupply: "0x18160ddd", // totalSupply()
+  balanceOf: "0x70a08231", // balanceOf(address)
+  transfer: "0xa9059cbb", // transfer(address,uint256)
+} as const;
+
 export const pagination_defaults = {
   page: 0,
   limit: 50,

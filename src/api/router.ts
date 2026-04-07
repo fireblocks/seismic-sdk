@@ -1,13 +1,7 @@
 import { Router } from "express";
 import { MainSDK } from "../MainSDK.js";
 import { ApiController } from "./controllers/controller.js";
-import {
-  validate,
-  transactionHistoryQuery,
-  contractsQuery,
-  transferBody,
-  txHashParam,
-} from "./validation/index.js";
+import { validate, contractsQuery, transferBody, txHashParam } from "./validation/index.js";
 import { z } from "zod";
 
 /** Validates `:vaultId` path param — numeric string */
@@ -29,11 +23,41 @@ const vaultIdParam = z.object({
  *   POST /api/:vaultId/transfer
  *   GET  /api/metrics
  *
- * Legacy Fireblocks routes are preserved for backwards compatibility.
  */
 export const configureRouter = (sdk: MainSDK): Router => {
   const router = Router();
   const controller = new ApiController(sdk);
+
+  // ─── Contract info ─────────────────────────────────────────────────────
+
+  /**
+   * @openapi
+   * /api/contracts/{contractAddress}:
+   *   get:
+   *     tags: [Contracts]
+   *     summary: Get ERC-20 token metadata (name, symbol, decimals, totalSupply)
+   *     parameters:
+   *       - in: path
+   *         name: contractAddress
+   *         required: true
+   *         schema:
+   *           type: string
+   *         example: "0xb0d4afd8879ed9f52b28595d31b441d079b2ca07"
+   *     responses:
+   *       200:
+   *         description: Token metadata
+   *       400:
+   *         description: Invalid contract address
+   */
+  router.get(
+    "/contracts/:contractAddress",
+    validate({
+      params: z.object({
+        contractAddress: z.string().regex(/^0x[0-9a-fA-F]{40}$/, "invalid address"),
+      }),
+    }),
+    controller.getContractInfo
+  );
 
   // ─── Seismic routes ────────────────────────────────────────────────────
 
@@ -168,7 +192,13 @@ export const configureRouter = (sdk: MainSDK): Router => {
    * /api/{vaultId}/transactions:
    *   get:
    *     tags: [Transaction History]
-   *     summary: Get transaction history for a vault
+   *     summary: Get ERC-20/SRC-20 Transfer event history for a vault's Seismic address
+   *     description: |
+   *       Returns Transfer events emitted by ERC-20 and SRC-20 contracts where the vault's
+   *       address appears as sender or recipient. Uses eth_getLogs under the hood.
+   *
+   *       **Note:** Native ETH transfers produce no logs and are not included.
+   *       **Note:** SRC-20 shielded transfers may not emit public events.
    *     parameters:
    *       - in: path
    *         name: vaultId
@@ -176,27 +206,39 @@ export const configureRouter = (sdk: MainSDK): Router => {
    *         schema:
    *           type: string
    *       - in: query
+   *         name: fromBlock
+   *         schema:
+   *           type: string
+   *         description: Start block (hex or "earliest"). Defaults to last 100,000 blocks (Seismic node limit).
+   *       - in: query
+   *         name: toBlock
+   *         schema:
+   *           type: string
+   *         description: End block (hex or "latest"). Defaults to "latest".
+   *       - in: query
+   *         name: contracts
+   *         schema:
+   *           type: string
+   *         description: Comma-separated contract addresses to filter by. If omitted, scans all contracts.
+   *       - in: query
    *         name: limit
    *         schema:
    *           type: integer
+   *         description: Maximum number of results to return.
    *       - in: query
    *         name: offset
    *         schema:
    *           type: integer
-   *       - in: query
-   *         name: order
-   *         schema:
-   *           type: string
-   *           enum: [ASC, DESC]
+   *         description: Number of results to skip (for pagination).
    *     responses:
    *       200:
-   *         description: Transaction list
+   *         description: List of Transfer events
    *       400:
    *         description: Invalid parameters
    */
   router.get(
     "/:vaultId/transactions",
-    validate({ params: vaultIdParam, query: transactionHistoryQuery }),
+    validate({ params: vaultIdParam }),
     controller.getTransactionHistory
   );
 
@@ -285,6 +327,10 @@ export const configureRouter = (sdk: MainSDK): Router => {
    *                 type: string
    *                 description: Token contract address. Required for ERC20 and SRC20 transfers.
    *                 example: "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238"
+   *               decimals:
+   *                 type: integer
+   *                 description: Token decimals. Defaults to 18.
+   *                 example: 18
    *               note:
    *                 type: string
    *                 description: Optional label attached to the Fireblocks signing request
@@ -303,6 +349,12 @@ export const configureRouter = (sdk: MainSDK): Router => {
    *               value:
    *                 type: ERC20
    *                 recipient: "0xd07afc9df1333f577ee83f92250dc854b227720f"
+   *                 amount: 10
+   *                 contractAddress: "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238"
+   *             ERC20 to vault:
+   *               value:
+   *                 type: ERC20
+   *                 destinationVaultId: "1"
    *                 amount: 10
    *                 contractAddress: "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238"
    *             SRC20 shielded to vault:

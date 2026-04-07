@@ -35,6 +35,7 @@ export const getSwaggerSpec = (): ReturnType<typeof swaggerJsdoc> => {
         ],
         tags: [
           { name: "Health", description: "Service health check" },
+          { name: "Contracts", description: "ERC-20 contract metadata" },
           {
             name: "Balance",
             description: "Query balances by address",
@@ -48,10 +49,15 @@ export const getSwaggerSpec = (): ReturnType<typeof swaggerJsdoc> => {
             name: "Transaction History",
             description: "Retrieve past transaction records and details",
           },
-          { name: "Vault", description: "Vault account management (legacy)" },
+          { name: "Vault", description: "Vault account management" },
         ],
       },
-      apis: ["./dist/server.js", "./dist/api/router.js", "./dist/api/controllers/*.js", "./dist/routes/*.js"],
+      apis: [
+        "./dist/server.js",
+        "./dist/api/router.js",
+        "./dist/api/controllers/*.js",
+        "./dist/routes/*.js",
+      ],
     };
 
     cachedSwaggerSpec = swaggerJsdoc(options);

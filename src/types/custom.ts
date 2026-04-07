@@ -89,6 +89,12 @@ export type GetTransactionHistoryResponse = {
 
 export type GetTransactionHistoryFromIndexerOpts = {
   address: string;
+  /** Hex block number or "earliest"/"latest". Defaults to "earliest". */
+  fromBlock?: string;
+  /** Hex block number or "earliest"/"latest". Defaults to "latest". */
+  toBlock?: string;
+  /** Optional contract addresses to filter by. If omitted, scans all contracts. */
+  contracts?: string[];
   limit?: number;
   offset?: number;
 };
