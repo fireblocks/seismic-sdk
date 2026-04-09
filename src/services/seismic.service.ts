@@ -10,6 +10,7 @@ import {
   numberToHex,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
+import type { LocalAccount } from "viem/accounts";
 import { secp256k1 } from "@noble/curves/secp256k1";
 import {
   createShieldedPublicClient,
@@ -484,10 +485,13 @@ export class BlockchainApiService {
    *                            via deriveKeyFromSignature — never stored on disk.
    */
   public createShieldedClient = async (
-    accountPrivateKey: Hex,
+    accountOrPrivateKey: Hex | LocalAccount,
     encryptionSk?: Hex
   ): Promise<SeismicClient> => {
-    const account = privateKeyToAccount(accountPrivateKey);
+    const account =
+      typeof accountOrPrivateKey === "string"
+        ? privateKeyToAccount(accountOrPrivateKey)
+        : accountOrPrivateKey;
 
     const chain: Chain = {
       ...seismicDevnet2,

@@ -1,4 +1,15 @@
-import { type Hex, type Address, pad, concat, toHex, toRlp, numberToHex, keccak256 } from "viem";
+import {
+  type Hex,
+  type Address,
+  pad,
+  concat,
+  toHex,
+  toRlp,
+  numberToHex,
+  keccak256,
+  serializeTransaction,
+} from "viem";
+import { toAccount } from "viem/accounts";
 import { FireblocksService, BlockchainApiService } from "./services/index.js";
 import {
   BroadcastResult,
@@ -675,12 +686,45 @@ export class MainSDK {
     note?: string
   ): Promise<CreateTransactionResponse> => {
     try {
+      const vaultData = await this.ensureVaultData(vaultId);
       const encryptionSk = await this.deriveEncryptionKey(vaultId);
 
-      // encryptionSk serves as both the signing key and the seismic-viem encryption key.
-      // The resulting Seismic address = privateKeyToAccount(encryptionSk).address.
+      // Build a custom viem account backed by Fireblocks raw signing
+      // - address: the vault's address (0x6d7a...)
+      // - encryptionSk: used only for ECDH calldata encryption, not for signing
+      const fireblocksAccount = toAccount({
+        address: vaultData.address as Address,
+        signMessage: async () => {
+          throw new Error("signMessage not supported for Fireblocks account");
+        },
+        signTypedData: async () => {
+          throw new Error("signTypedData not supported for Fireblocks account");
+        },
+        signTransaction: async (transaction, options) => {
+          const serialize = (options?.serializer ?? serializeTransaction) as (
+            tx: unknown,
+            sig?: unknown
+          ) => Hex;
+          const serialized = serialize(transaction);
+          const hash = keccak256(serialized);
+          const signedMsg = await this.fireblocksService.signTransaction(
+            hash.slice(2),
+            vaultId,
+            note || "src20-shielded-transfer"
+          );
+          const sig = signedMsg.signature;
+          if (!sig?.r || !sig?.s || sig.v === undefined) {
+            throw new Error("Incomplete signature from Fireblocks");
+          }
+          const r = `0x${sig.r.replace(/^0x/, "").padStart(64, "0")}` as Hex;
+          const s = `0x${sig.s.replace(/^0x/, "").padStart(64, "0")}` as Hex;
+          const v = sig.v < 27 ? sig.v : sig.v - 27;
+          return serialize(transaction, { r, s, v });
+        },
+      });
+
       const client = await this.blockchainApiService.createShieldedClient(
-        encryptionSk,
+        fireblocksAccount,
         encryptionSk
       );
 
