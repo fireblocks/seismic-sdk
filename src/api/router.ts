@@ -4,7 +4,7 @@ import { ApiController } from "./controllers/controller.js";
 import { validate, contractsQuery, transferBody, txHashParam } from "./validation/index.js";
 import { z } from "zod";
 
-/** Validates `:vaultId` path param — numeric string */
+/** Validates `:vaultId` path param - numeric string */
 const vaultIdParam = z.object({
   vaultId: z.string().min(1, "vaultId is required").regex(/^\d+$/, "vaultId must be numeric"),
 });
@@ -197,12 +197,12 @@ export const configureRouter = (sdk: MainSDK): Router => {
    *       Returns transaction history for the vault's Seismic address.
    *
    *       **`type` parameter controls which asset class is fetched:**
-   *       - `erc20` (default) — standard ERC-20 Transfer events. Uses SocialScan `tokentx` if
+   *       - `erc20` (default) - standard ERC-20 Transfer events. Uses SocialScan `tokentx` if
    *         `SOCIALSCAN_API_KEY` is set, otherwise falls back to `eth_getLogs` (last 99k blocks).
-   *       - `native` — native ETH transfers. **Requires `SOCIALSCAN_API_KEY`** (ETH transfers
+   *       - `native` - native ETH transfers. **Requires `SOCIALSCAN_API_KEY`** (ETH transfers
    *         produce no logs on any EVM chain; only the explorer indexes them).
-   *       - `src20` — Seismic SRC-20 Transfer events.
-   *       - `all` — native + ERC-20 merged. **Requires `SOCIALSCAN_API_KEY`** for native portion.
+   *       - `src20` - Seismic SRC-20 Transfer events.
+   *       - `all` - native + ERC-20 merged. **Requires `SOCIALSCAN_API_KEY`** for native portion.
    *     parameters:
    *       - in: path
    *         name: vaultId
@@ -292,13 +292,13 @@ export const configureRouter = (sdk: MainSDK): Router => {
    *       Transfers assets from the given vault to a destination.
    *
    *       **Transfer types:**
-   *       - `ETH` — native coin transfer
-   *       - `ERC20` — standard ERC-20 token transfer (requires `contractAddress`)
-   *       - `SRC20` — Seismic shielded token transfer with encrypted calldata (requires `contractAddress`)
+   *       - `ETH` - native coin transfer
+   *       - `ERC20` - standard ERC-20 token transfer (requires `contractAddress`)
+   *       - `SRC20` - Seismic shielded token transfer with encrypted calldata (requires `contractAddress`)
    *
    *       **Destination (exactly one required):**
-   *       - `recipient` — a direct EVM address (`0x...`)
-   *       - `destinationVaultId` — a Fireblocks vault ID; its Seismic address is resolved automatically
+   *       - `recipient` - a direct EVM address (`0x...`)
+   *       - `destinationVaultId` - a Fireblocks vault ID; its Seismic address is resolved automatically
    *     parameters:
    *       - in: path
    *         name: vaultId

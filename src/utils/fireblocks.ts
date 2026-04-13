@@ -2,11 +2,12 @@ import fs from "fs";
 import {
   Fireblocks,
   FireblocksResponse,
+  SignedMessageAlgorithmEnum,
   TransactionResponse,
   TransactionStateEnum,
   VaultsApiGetPublicKeyInfoRequest,
 } from "@fireblocks/ts-sdk";
-import { Logger, derivationPath, signingAlgorithm, formatErrorMessage } from "./index.js";
+import { Logger, derivationPath, formatErrorMessage } from "./index.js";
 
 const logger = new Logger("utils:fireblocks");
 
@@ -129,7 +130,7 @@ export const getPublicKeyForDerivationPathAndAlgorithm = async (
   const coinType = testnet ? 1 : derivationPath.coinType;
   const requestParams: VaultsApiGetPublicKeyInfoRequest = {
     derivationPath: `[${derivationPath.purpose}, ${coinType}, ${vaultAccountId}, ${derivationPath.change}, ${derivationPath.addressIndex}]`,
-    algorithm: signingAlgorithm,
+    algorithm: SignedMessageAlgorithmEnum.EcdsaSecp256K1,
     compressed: true,
   };
   try {

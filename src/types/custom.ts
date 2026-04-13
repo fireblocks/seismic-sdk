@@ -136,7 +136,7 @@ export interface EvmTxFields {
 
 export interface UnsignedTransaction {
   unsignedTx?: unknown;
-  /** EIP-155 keccak256 hash of the RLP-encoded tx — this is what Fireblocks signs */
+  /** EIP-155 keccak256 hash of the RLP-encoded tx - this is what Fireblocks signs */
   signingHash?: string;
   /** Raw EVM transaction fields, needed to assemble the signed RLP after signing */
   evmTxFields?: EvmTxFields;
@@ -168,7 +168,7 @@ export enum TransactionType {
 
 /**
  * Token types for Seismic.
- * SRC20 is Seismic's privacy-preserving ERC-20 variant — balances are stored
+ * SRC20 is Seismic's privacy-preserving ERC-20 variant - balances are stored
  * as encrypted suint256 values and require signed reads to query.
  */
 export enum TokenType {
@@ -203,7 +203,7 @@ export type SDKResponse =
  * Per-vault identity state cached in MainSDK's vault map.
  * Populated lazily on first use of each vault account.
  * encryptionSk is derived once per session from a deterministic Fireblocks RAW signature
- * (SHA-256 of fullSig over SEED_MESSAGE) and cached in process memory only — never on disk.
+ * (SHA-256 of fullSig over SEED_MESSAGE) and cached in process memory only - never on disk.
  */
 export interface VaultData {
   vaultAccountId: string;
@@ -214,8 +214,8 @@ export interface VaultData {
 
 /**
  * Transfer type for POST /api/:vaultId/transfer.
- * ETH  — plain ETH transfer
- * ERC20 — standard plaintext ERC-20 transfer
- * SRC20 — Seismic shielded transfer (type 0x4A, AES-GCM encrypted calldata)
+ * ETH  - plain ETH transfer
+ * ERC20 - standard plaintext ERC-20 transfer
+ * SRC20 - Seismic shielded transfer (type 0x4A, AES-GCM encrypted calldata)
  */
 export type TransferType = "ETH" | "ERC20" | "SRC20";

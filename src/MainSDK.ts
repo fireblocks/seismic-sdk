@@ -157,7 +157,7 @@ export class MainSDK {
         encryptionSk = await this.deriveEncryptionKey(params.vaultId);
       } catch (err) {
         this.logger.warn(
-          `Could not derive encryption key for SRC-20 history — amounts will be 0: ${(err as Error).message}`
+          `Could not derive encryption key for SRC-20 history - amounts will be 0: ${(err as Error).message}`
         );
       }
     }
@@ -597,7 +597,7 @@ export class MainSDK {
    *
    * Signs SEED_MESSAGE_HEX via Fireblocks RAW signing, then computes
    * SHA-256(fullSig) to produce a stable 32-byte encryptionSk. The result is
-   * cached in the vault's VaultData entry — subsequent calls return the cached
+   * cached in the vault's VaultData entry - subsequent calls return the cached
    * value without a Fireblocks round-trip.
    *
    * The encryptionSk is held in process memory only and zeroed on shutdown.
@@ -608,7 +608,7 @@ export class MainSDK {
 
     this.logger.info(`Deriving encryption key | vault:${vaultId}`);
     const signedMsg = await this.fireblocksService.signTransaction(
-      SEED_MESSAGE_HEX.slice(2), // strip 0x — rawSign expects plain hex
+      SEED_MESSAGE_HEX.slice(2), // strip 0x - rawSign expects plain hex
       vaultId,
       "derive-encryption-key"
     );
@@ -662,7 +662,7 @@ export class MainSDK {
       const packedSignature = concat([rPadded, sPadded, toHex(v, { size: 1 })]);
 
       // Use a plain unsigned eth_call via ShieldedPublicClient.
-      // balanceOfSigned does NOT check msg.sender (Seismic zeroes it for unsigned calls) —
+      // balanceOfSigned does NOT check msg.sender (Seismic zeroes it for unsigned calls) -
       // authorization comes entirely from the ecrecover check on packedSignature.
       // Signed reads (type-0x4A → eth_call) are only needed for balance() which reads
       // msg.sender's own balance; they also require the caller to have ETH for gas
@@ -779,7 +779,7 @@ export class MainSDK {
    */
   public async shutdown(): Promise<void> {
     this.logger.info("Shutting down MainSDK...");
-    // Zero encryptionSk values before clearing — defense-in-depth against memory scraping
+    // Zero encryptionSk values before clearing - defense-in-depth against memory scraping
     for (const vaultData of this.vaultData.values()) {
       if (vaultData.encryptionSk) {
         vaultData.encryptionSk = "0".repeat(vaultData.encryptionSk.length);

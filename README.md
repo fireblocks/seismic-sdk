@@ -1,6 +1,6 @@
 # Fireblocks × Seismic SDK
 
-A Node.js SDK for integrating [Fireblocks](https://www.fireblocks.com/) MPC wallets with [Seismic](https://seismic.systems/) — a privacy-preserving, EVM-compatible blockchain that encrypts transaction calldata inside a TEE.
+A Node.js SDK for integrating [Fireblocks](https://www.fireblocks.com/) MPC wallets with [Seismic](https://seismic.systems/) - a privacy-preserving, EVM-compatible blockchain that encrypts transaction calldata inside a TEE.
 
 ---
 
@@ -89,14 +89,14 @@ const sdk = new MainSDK({
   testnet: true,
 });
 
-// Resolve and cache vault identity (lazy — runs on first use)
+// Resolve and cache vault identity (lazy - runs on first use)
 const address = await sdk.getSeismicAddress("0");
 const balance = await sdk.getBalance("0");
 
-// SRC-20 shielded balance — Fireblocks signs the read authorization
+// SRC-20 shielded balance - Fireblocks signs the read authorization
 const src20 = await sdk.getSrc20Balance("0", "0xContractAddress");
 
-// Shielded transfer — encryptionSk derived once, then cached
+// Shielded transfer - encryptionSk derived once, then cached
 const tx = await sdk.createShieldedTransaction(
   "0", // vaultId
   "0xRecipient",
@@ -114,13 +114,13 @@ await sdk.shutdown();
 
 ### Session lifecycle
 
-1. **Vault init (lazy)** — on first use, `getPublicKeyByVaultID` fetches the vault's compressed secp256k1 public key from Fireblocks. The Seismic/ETH address is derived via `keccak256(uncompressed_pubkey)[last 20 bytes]` and cached in memory.
+1. **Vault init (lazy)** - on first use, `getPublicKeyByVaultID` fetches the vault's compressed secp256k1 public key from Fireblocks. The Seismic/ETH address is derived via `keccak256(uncompressed_pubkey)[last 20 bytes]` and cached in memory.
 
-2. **Encryption key derivation** — `deriveEncryptionKey(vaultId)` signs a fixed 32-byte seed (`keccak256("Seismic Fireblocks Encryption Key Derivation")`) via Fireblocks RAW signing, then computes `SHA-256(fullSig)` to produce a 32-byte `encryptionSk`. Because Fireblocks MPC signatures are deterministic, the same key is re-derived on every session restart without re-approval. Stored in process memory only.
+2. **Encryption key derivation** - `deriveEncryptionKey(vaultId)` signs a fixed 32-byte seed (`keccak256("Seismic Fireblocks Encryption Key Derivation")`) via Fireblocks RAW signing, then computes `SHA-256(fullSig)` to produce a 32-byte `encryptionSk`. Because Fireblocks MPC signatures are deterministic, the same key is re-derived on every session restart without re-approval. Stored in process memory only.
 
-3. **TEE session** — `seismic-viem`'s `createShieldedWalletClient` fetches the Seismic TEE public key once per client instance. The `encryptionSk` is used for ECDH with the TEE to derive the AES-256-GCM calldata encryption key.
+3. **TEE session** - `seismic-viem`'s `createShieldedWalletClient` fetches the Seismic TEE public key once per client instance. The `encryptionSk` is used for ECDH with the TEE to derive the AES-256-GCM calldata encryption key.
 
-4. **Shutdown** — `sdk.shutdown()` zeroes all `encryptionSk` values before clearing the vault cache.
+4. **Shutdown** - `sdk.shutdown()` zeroes all `encryptionSk` values before clearing the vault cache.
 
 ### SRC-20 balance reads
 

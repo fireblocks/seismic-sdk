@@ -16,7 +16,7 @@ import { type Hex, type Address, keccak256, encodePacked } from "viem";
  *   inner  = keccak256(abi.encodePacked("SRC20_BALANCE_READ", owner, expiry))
  *   outer  = keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", inner))
  *
- * The outer hash is what Fireblocks must sign — the contract runs the same derivation
+ * The outer hash is what Fireblocks must sign - the contract runs the same derivation
  * and calls ecrecover(outer, v, r, s) to recover the signer address.
  *
  * The signature is token-agnostic: one Fireblocks sign authorizes balance reads on
@@ -24,7 +24,7 @@ import { type Hex, type Address, keccak256, encodePacked } from "viem";
  *
  * @param owner  - Address whose balance is being read
  * @param expiry - Unix timestamp (seconds) after which the signature is invalid
- * @returns 32-byte EIP-191 signed hash — pass this directly to FireblocksSigner.rawSign()
+ * @returns 32-byte EIP-191 signed hash - pass this directly to FireblocksSigner.rawSign()
  */
 export function buildBalanceReadMessage(owner: Address, expiry: bigint): Hex {
   const inner = keccak256(

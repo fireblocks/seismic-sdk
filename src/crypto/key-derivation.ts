@@ -8,7 +8,7 @@ import { sha256 } from "@noble/hashes/sha256";
  * r + s + v signature returned by Fireblocks (65 bytes / 130 hex chars).
  *
  * **Why this works as a key derivation mechanism:**
- * Fireblocks MPC signatures are deterministic — signing the same message from the
+ * Fireblocks MPC signatures are deterministic - signing the same message from the
  * same vault always produces the same signature without re-approval (Fireblocks caches
  * the result). So SHA-256(sig) is also deterministic: the key can be re-derived on
  * every session restart without storing any secret on disk.
@@ -19,7 +19,7 @@ import { sha256 } from "@noble/hashes/sha256";
  *
  * **Security note:** This key is kept in process memory only (never written to disk).
  * It should be zeroed when the SDK shuts down. A compromise of this key only affects
- * calldata confidentiality for in-flight transactions — historical transactions remain
+ * calldata confidentiality for in-flight transactions - historical transactions remain
  * protected by the Seismic TEE's own key rotation.
  *
  * @param fullSig - The `fullSig` field from a Fireblocks SignedMessage (hex string, with or without 0x)

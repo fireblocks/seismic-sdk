@@ -116,7 +116,7 @@ export const submitTransactionBody = z.object({
 // ============================================================================
 
 /**
- * Validates `:txHash` route param — must be 0x-prefixed 32-byte hex (66 chars total)
+ * Validates `:txHash` route param - must be 0x-prefixed 32-byte hex (66 chars total)
  */
 export const txHashParam = z.object({
   txHash: z
@@ -125,7 +125,7 @@ export const txHashParam = z.object({
 });
 
 /**
- * Validates contracts query — accepts comma-separated string or repeated params
+ * Validates contracts query - accepts comma-separated string or repeated params
  * e.g. ?contracts=0x1,0x2  or  ?contracts=0x1&contracts=0x2
  */
 export const contractsQuery = z.object({

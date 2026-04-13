@@ -244,7 +244,7 @@ export const formatErrorMessage = (error: unknown): string => {
         : (message ?? safeStringify(maybeAxios.response.data));
     }
     if (error instanceof Error) return error.message;
-    // Plain object without response — stringify but omit request/response noise
+    // Plain object without response - stringify but omit request/response noise
     const obj = error as Record<string, unknown>;
     const rest = Object.fromEntries(
       Object.entries(obj).filter(([k]) => k !== "request" && k !== "response")

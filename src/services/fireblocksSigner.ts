@@ -36,11 +36,11 @@ export class FireblocksSigner {
    *
    * Fireblocks has two mutually exclusive RAW signing modes:
    *
-   * **Testnet** — "natively supported asset" mode:
+   * **Testnet** - "natively supported asset" mode:
    *   Uses `assetId: "BTC_TEST"` (coin type 1) + `source.id`. Fireblocks infers the
    *   key path from the asset + vault account. No `derivationPath` in the message.
    *
-   * **Mainnet** — "unsupported asset" mode:
+   * **Mainnet** - "unsupported asset" mode:
    *   No `assetId`, `source` has no `id`. The full BIP-44 path (coin type 60) is
    *   embedded in the message's `derivationPath`. Requires `algorithm` in rawMessageData.
    */
@@ -52,7 +52,7 @@ export class FireblocksSigner {
     const note = `[Seismic SDK] vault:${vaultAccountId} | ${purpose} | ${new Date().toISOString()}`;
 
     if (this.coinType === 1) {
-      // Testnet: BTC_TEST asset uses m/44'/1'/vaultId'/0/0 — matches Seismic testnet key
+      // Testnet: BTC_TEST asset uses m/44'/1'/vaultId'/0/0 - matches Seismic testnet key
       return {
         note,
         assetId: FIREBLOCKS_RAW_SIGN_ASSET_ID,
@@ -66,7 +66,7 @@ export class FireblocksSigner {
       };
     }
 
-    // Mainnet: explicit derivation path (coin type 60) — no assetId, no source.id
+    // Mainnet: explicit derivation path (coin type 60) - no assetId, no source.id
     return {
       note,
       source: { type: TransferPeerPathType.VaultAccount },
@@ -131,7 +131,7 @@ export class FireblocksSigner {
    * @param content        - 32-byte message to sign (hex, with or without 0x prefix)
    * @param vaultAccountId - Fireblocks vault account ID
    * @param purpose        - Short label describing why this signature is being requested.
-   *                         Shown in the Fireblocks console and activity log — make it
+   *                         Shown in the Fireblocks console and activity log - make it
    *                         descriptive so ops can identify the operation without needing
    *                         to correlate SDK logs
    *                         (e.g. "derive-encryption-key", "src20-balance-read", "seismic-transfer")
