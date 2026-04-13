@@ -102,7 +102,10 @@ export class ApiController {
    */
   public getTransactionHistory = async (req: Request, res: Response) => {
     const { vaultId } = req.params;
-    const { fromBlock, toBlock, contracts, limit, offset } = req.query as Record<string, string>;
+    const { type, fromBlock, toBlock, contracts, limit, offset } = req.query as Record<
+      string,
+      string
+    >;
     try {
       const contractList = contracts
         ? Array.isArray(contracts)
@@ -111,6 +114,7 @@ export class ApiController {
         : undefined;
       const result = await this.sdk.getTransactionHistory({
         vaultId,
+        type: (type as "native" | "erc20" | "src20" | "all") ?? "erc20",
         fromBlock,
         toBlock,
         contracts: contractList,
@@ -121,10 +125,10 @@ export class ApiController {
         success: true,
         data: result.transactions,
         meta: {
+          source: result.source,
           scannedFromBlock: result.fromBlock,
           scannedToBlock: result.toBlock,
           count: result.transactions.length,
-          note: "Only ERC-20/SRC-20 Transfer events are returned. Native ETH transfers produce no logs and cannot be retrieved via eth_getLogs.",
         },
       });
     } catch (error) {

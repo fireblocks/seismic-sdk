@@ -35,6 +35,7 @@
 
 // Add your custom types below this line (Below are some generic Request/Response types for SDK functions, adjusted as needed.)
 
+import { type Hex } from "viem";
 import { BasePath } from "@fireblocks/ts-sdk";
 import { GetTransactionsHistoryOpts } from "./index.js";
 
@@ -89,6 +90,15 @@ export type GetTransactionHistoryResponse = {
 
 export type GetTransactionHistoryFromIndexerOpts = {
   address: string;
+  /**
+   * Asset type to fetch:
+   * - "native"  → ETH transfers (requires SOCIALSCAN_API_KEY; no logs on RPC)
+   * - "erc20"   → Standard ERC-20 Transfer events
+   * - "src20"   → Seismic SRC-20 Transfer events (encrypted amounts, requires contracts filter)
+   * - "all"     → Native + ERC-20 merged (requires SOCIALSCAN_API_KEY for native)
+   * Defaults to "erc20" (always available via eth_getLogs fallback).
+   */
+  type?: "native" | "erc20" | "src20" | "all";
   /** Hex block number or "earliest"/"latest". Defaults to "earliest". */
   fromBlock?: string;
   /** Hex block number or "earliest"/"latest". Defaults to "latest". */
@@ -97,6 +107,13 @@ export type GetTransactionHistoryFromIndexerOpts = {
   contracts?: string[];
   limit?: number;
   offset?: number;
+  /**
+   * Vault's encryption private key (32-byte hex).
+   * When provided for type "src20", each transaction's encrypted calldata is
+   * decrypted client-side and the plaintext amount is returned instead of 0.
+   * Derive this via MainSDK.deriveEncryptionKey(vaultId).
+   */
+  encryptionSk?: Hex;
 };
 
 export type GetTransactionHistoryParams =
@@ -137,6 +154,8 @@ export type Transaction = {
   sender: string;
   recipient: string;
   amount: number;
+  /** Raw AES-GCM ciphertext from a SRC-20 Transfer event. Present only for SRC-20 txs. */
+  encryptedAmount?: string;
   transaction_hash: string;
   timestamp?: string | number;
   success: boolean;

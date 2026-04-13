@@ -194,11 +194,15 @@ export const configureRouter = (sdk: MainSDK): Router => {
    *     tags: [Transaction History]
    *     summary: Get ERC-20/SRC-20 Transfer event history for a vault's Seismic address
    *     description: |
-   *       Returns Transfer events emitted by ERC-20 and SRC-20 contracts where the vault's
-   *       address appears as sender or recipient. Uses eth_getLogs under the hood.
+   *       Returns transaction history for the vault's Seismic address.
    *
-   *       **Note:** Native ETH transfers produce no logs and are not included.
-   *       **Note:** SRC-20 shielded transfers may not emit public events.
+   *       **`type` parameter controls which asset class is fetched:**
+   *       - `erc20` (default) — standard ERC-20 Transfer events. Uses SocialScan `tokentx` if
+   *         `SOCIALSCAN_API_KEY` is set, otherwise falls back to `eth_getLogs` (last 99k blocks).
+   *       - `native` — native ETH transfers. **Requires `SOCIALSCAN_API_KEY`** (ETH transfers
+   *         produce no logs on any EVM chain; only the explorer indexes them).
+   *       - `src20` — Seismic SRC-20 Transfer events.
+   *       - `all` — native + ERC-20 merged. **Requires `SOCIALSCAN_API_KEY`** for native portion.
    *     parameters:
    *       - in: path
    *         name: vaultId
@@ -206,20 +210,27 @@ export const configureRouter = (sdk: MainSDK): Router => {
    *         schema:
    *           type: string
    *       - in: query
+   *         name: type
+   *         schema:
+   *           type: string
+   *           enum: [native, erc20, src20, all]
+   *           default: erc20
+   *         description: Asset type to fetch (see description above).
+   *       - in: query
    *         name: fromBlock
    *         schema:
    *           type: string
-   *         description: Start block (hex or "earliest"). Defaults to last 100,000 blocks (Seismic node limit).
+   *         description: Start block (hex). Only used for eth_getLogs fallback; ignored when using explorer.
    *       - in: query
    *         name: toBlock
    *         schema:
    *           type: string
-   *         description: End block (hex or "latest"). Defaults to "latest".
+   *         description: End block (hex). Only used for eth_getLogs fallback; ignored when using explorer.
    *       - in: query
    *         name: contracts
    *         schema:
    *           type: string
-   *         description: Comma-separated contract addresses to filter by. If omitted, scans all contracts.
+   *         description: Comma-separated contract addresses to filter by. Required for type=src20.
    *       - in: query
    *         name: limit
    *         schema:

@@ -16,6 +16,9 @@ import {
   createShieldedPublicClient,
   createShieldedWalletClient,
   getShieldedContract,
+  getEncryption,
+  AesGcmCrypto,
+  encodeSeismicMetadataAsAAD,
   seismicDevnet2,
   type ShieldedPublicClient,
   type ShieldedWalletClient,
@@ -52,7 +55,9 @@ import {
   ERC20_SELECTORS,
   DEFAULT_TOKEN_DECIMALS,
   ERC20_TRANSFER_TOPIC,
+  SRC20_TRANSFER_TOPIC,
 } from "../utils/constants.js";
+import { ExplorerService } from "./explorer.service.js";
 import { SRC20Abi } from "../seismic/abi.js";
 
 type SeismicClient = ShieldedWalletClient<Transport, Chain>;
@@ -64,12 +69,14 @@ export class BlockchainApiService {
   private readonly rpcUrl: string;
   private readonly chainId: number;
   private readonly errorHandler = new ErrorHandler("blockchain-api", this.logger);
+  /** Cached TEE public key - stable per network session */
+  private teePublicKey: string | null = null;
 
   constructor(testnet: boolean = false) {
     this.axiosClient = axiosInstance;
     this.rpcUrl =
       process.env.RPC_URL || (testnet ? api_constants.testnet_rpc : api_constants.mainnet_rpc);
-    this.chainId = testnet ? SEISMIC_CHAIN_ID.testnet : SEISMIC_CHAIN_ID.testnet;
+    this.chainId = testnet ? SEISMIC_CHAIN_ID.testnet : SEISMIC_CHAIN_ID.mainnet;
   }
 
   public getChainId = (): number => this.chainId;
@@ -96,7 +103,7 @@ export class BlockchainApiService {
    * Derives the Seismic/ETH address from a compressed secp256k1 public key.
    *
    * Decompresses the 33-byte pubkey to 65 bytes, strips the '04' prefix,
-   * applies keccak256, and takes the last 20 bytes — standard EVM address derivation.
+   * applies keccak256, and takes the last 20 bytes - standard EVM address derivation.
    */
   public formatAddress = (pubKey: string): string => {
     try {
@@ -259,7 +266,7 @@ export class BlockchainApiService {
   /**
    * Builds an unsigned ETH transfer transaction for Seismic.
    *
-   * For SRC-20 shielded transfers use MainSDK.createShieldedTransaction instead —
+   * For SRC-20 shielded transfers use MainSDK.createShieldedTransaction instead -
    * seismic-viem handles calldata encryption and type-0x4A serialization internally.
    */
   public buildUnsignedTransaction = async (
@@ -326,7 +333,7 @@ export class BlockchainApiService {
 
   /**
    * Serializes the unsigned transaction for Fireblocks RAW signing.
-   * Delegates to buildUnsignedTransaction — callers use the tx fields to construct
+   * Delegates to buildUnsignedTransaction - callers use the tx fields to construct
    * the EIP-155 hash that Fireblocks signs.
    */
   public serializeTransaction = async (
@@ -346,7 +353,7 @@ export class BlockchainApiService {
   /**
    * Broadcasts a signed raw transaction to the Seismic network via eth_sendRawTransaction.
    *
-   * For shielded SRC-20 transfers, use MainSDK.createShieldedTransaction — those
+   * For shielded SRC-20 transfers, use MainSDK.createShieldedTransaction - those
    * go through seismic-viem and never reach this method.
    */
   public broadcastTransaction = async (signedTx: unknown): Promise<BroadcastResult> => {
@@ -365,23 +372,119 @@ export class BlockchainApiService {
   };
 
   /**
-   * Retrieves ERC-20 / SRC-20 Transfer event history for a Seismic address.
+   * Retrieves transaction history for a Seismic address.
    *
-   * Uses eth_getLogs with the standard Transfer(address,address,uint256) topic.
-   * Queries both sent (topics[1]=address) and received (topics[2]=address) logs
-   * in parallel, deduplicates, fetches block timestamps, and returns sorted results.
+   * Routes by `type`:
+   * - "native"  → SocialScan `txlist` + `txlistinternal` (ETH has no logs; requires SOCIALSCAN_API_KEY)
+   * - "erc20"   → SocialScan `tokentx` if SOCIALSCAN_API_KEY is set, else fallback to eth_getLogs
+   * - "src20"   → SocialScan `getLogs` filtered by SRC-20 Transfer topic (requires contracts + SOCIALSCAN_API_KEY)
+   * - "all"     → Native + ERC-20 merged (requires SOCIALSCAN_API_KEY for native portion)
    *
-   * Note: native ETH transfers produce no logs and are not included.
-   * Note: SRC-20 transfer events may not be emitted publicly (shielded by design).
+   * Falls back to eth_getLogs for ERC-20 when no API key is configured.
+   * Native ETH history is unavailable without the explorer API key.
    */
   public getTransactionHistory = async (
     params: GetTransactionHistoryFromIndexerOpts
-  ): Promise<{ transactions: Transaction[]; fromBlock: string; toBlock: string }> => {
-    const { address, contracts, limit, offset = 0 } = params;
+  ): Promise<{
+    transactions: Transaction[];
+    fromBlock: string;
+    toBlock: string;
+    source: string;
+  }> => {
+    const { address, contracts, limit = 50, offset = 0, type = "erc20", encryptionSk } = params;
 
     if (!validateAddress(address)) {
       throw this.errorHandler.handleApiError(
         new Error("Invalid address provided"),
+        "fetching transaction history"
+      );
+    }
+
+    const apiKey = process.env.SOCIALSCAN_API_KEY;
+    const useExplorer = !!apiKey;
+
+    // ── Explorer path ───────────────────────────────────────────────────────
+    if (useExplorer) {
+      const explorer = new ExplorerService(apiKey!, this.chainId === SEISMIC_CHAIN_ID.testnet);
+
+      // native has no fallback - ETH transfers emit no logs, only the explorer can provide them
+      if (type === "native") {
+        const transactions = await explorer.getNativeTransactions(address, limit, offset);
+        return { transactions, fromBlock: "0", toBlock: "latest", source: "socialscan-txlist" };
+      }
+
+      if (type === "src20") {
+        if (!contracts?.length) {
+          throw this.errorHandler.handleApiError(
+            new Error(
+              "SRC-20 history requires at least one contract address in the `contracts` filter"
+            ),
+            "fetching SRC-20 transaction history"
+          );
+        }
+        try {
+          const allTxs = (
+            await Promise.all(
+              contracts.map((c) => explorer.getSrc20Transactions(address, c, limit, offset))
+            )
+          ).flat();
+          allTxs.sort((a, b) => (b.timestamp as number) - (a.timestamp as number));
+          return {
+            transactions: allTxs.slice(0, limit),
+            fromBlock: "0",
+            toBlock: "latest",
+            source: "socialscan-getlogs-src20",
+          };
+        } catch (explorerErr) {
+          this.logger.warn(
+            `SocialScan unavailable (${(explorerErr as Error).message}), falling back to eth_getLogs for SRC-20`
+          );
+          // fall through to eth_getLogs below
+        }
+      }
+
+      if (type === "all") {
+        const [native, erc20] = await Promise.all([
+          explorer.getNativeTransactions(address, limit, offset),
+          explorer.getErc20Transactions(address, contracts?.[0], limit, offset),
+        ]);
+        const merged = [...native, ...erc20].sort(
+          (a, b) => (b.timestamp as number) - (a.timestamp as number)
+        );
+        return {
+          transactions: merged.slice(0, limit),
+          fromBlock: "0",
+          toBlock: "latest",
+          source: "socialscan-txlist+tokentx",
+        };
+      }
+
+      // type === "erc20": try explorer, fall back to eth_getLogs if unavailable
+      try {
+        const transactions = await explorer.getErc20Transactions(
+          address,
+          contracts?.[0],
+          limit,
+          offset
+        );
+        return { transactions, fromBlock: "0", toBlock: "latest", source: "socialscan-tokentx" };
+      } catch (explorerErr) {
+        this.logger.warn(
+          `SocialScan unavailable (${(explorerErr as Error).message}), falling back to eth_getLogs`
+        );
+        // fall through to eth_getLogs below
+      }
+    }
+
+    // ── Fallback: eth_getLogs ────────────────────────────────────────────────
+    // Handles erc20, src20 (SocialScan unavailable), and all (erc20 portion).
+    // native has no RPC fallback - eth_getLogs does not capture ETH transfers.
+    if (type === "native") {
+      throw this.errorHandler.handleApiError(
+        new Error(
+          "Native ETH transaction history requires the SocialScan Explorer API (no RPC fallback). " +
+            "Set SOCIALSCAN_API_KEY in your environment (get a key at developer.socialscan.io)."
+        ),
         "fetching transaction history"
       );
     }
@@ -396,12 +499,13 @@ export class BlockchainApiService {
       const latest = parseInt(latestHex, 16);
       if (!toBlock) toBlock = latestHex;
       if (!fromBlock) {
-        const from = Math.max(0, latest - 99_000); // 99,000-block window, safely under the 100k limit
+        const from = Math.max(0, latest - 99_000); // safely under the 100k limit
         fromBlock = `0x${from.toString(16)}`;
       }
     }
 
     const paddedAddress = "0x" + address.slice(2).toLowerCase().padStart(64, "0");
+    const transferTopic = type === "src20" ? SRC20_TRANSFER_TOPIC : ERC20_TRANSFER_TOPIC;
 
     const baseFilter = {
       fromBlock,
@@ -411,10 +515,10 @@ export class BlockchainApiService {
 
     const [sentLogs, receivedLogs] = await Promise.all([
       this.jsonRpc<EthLog[]>("eth_getLogs", [
-        { ...baseFilter, topics: [ERC20_TRANSFER_TOPIC, paddedAddress, null] },
+        { ...baseFilter, topics: [transferTopic, paddedAddress, null] },
       ]),
       this.jsonRpc<EthLog[]>("eth_getLogs", [
-        { ...baseFilter, topics: [ERC20_TRANSFER_TOPIC, null, paddedAddress] },
+        { ...baseFilter, topics: [transferTopic, null, paddedAddress] },
       ]),
     ]);
 
@@ -427,37 +531,71 @@ export class BlockchainApiService {
       return true;
     });
 
-    // Sort by block descending before slicing
     allLogs.sort((a, b) => parseInt(b.blockNumber, 16) - parseInt(a.blockNumber, 16));
-
     const sliced =
       limit !== undefined ? allLogs.slice(offset, offset + limit) : allLogs.slice(offset);
 
-    // Fetch timestamps for unique blocks in the result set
+    // Fetch timestamps and token metadata in parallel for unique blocks/contracts
     const uniqueBlocks = [...new Set(sliced.map((l) => l.blockNumber))];
+    const uniqueContracts = [...new Set(sliced.map((l) => l.address))];
+
     const blockTimestamps = new Map<string, number>();
-    await Promise.all(
-      uniqueBlocks.map(async (blockNum) => {
+    const tokenDecimals = new Map<string, number>();
+    const tokenSymbols = new Map<string, string>();
+
+    await Promise.all([
+      ...uniqueBlocks.map(async (blockNum) => {
         const block = await this.jsonRpc<{ timestamp: string } | null>("eth_getBlockByNumber", [
           blockNum,
           false,
         ]);
         if (block) blockTimestamps.set(blockNum, parseInt(block.timestamp, 16));
+      }),
+      ...uniqueContracts.map(async (contractAddr) => {
+        const info = await this.getErc20Info(contractAddr);
+        tokenDecimals.set(contractAddr, info.decimals ?? DEFAULT_TOKEN_DECIMALS);
+        tokenSymbols.set(contractAddr, info.symbol ?? contractAddr);
+      }),
+    ]);
+
+    const isSrc20 = type === "src20";
+
+    const transactions = await Promise.all(
+      sliced.map(async (log) => {
+        const decimals = tokenDecimals.get(log.address) ?? DEFAULT_TOKEN_DECIMALS;
+        const symbol = tokenSymbols.get(log.address) ?? log.address;
+
+        let amount = 0;
+        if (isSrc20 && encryptionSk) {
+          // Decrypt the calldata of the type-0x4A tx to recover the plaintext amount
+          const decrypted = await this.decryptSrc20Amount(
+            log.transactionHash,
+            encryptionSk,
+            decimals
+          );
+          if (decrypted !== null) {
+            amount = decrypted;
+          }
+        } else if (!isSrc20) {
+          const rawAmount = BigInt(log.data || "0x0");
+          amount = Number(rawAmount) / 10 ** decimals;
+        }
+
+        return {
+          type: TransactionType.FungibleToken,
+          tokenInfo: { tokenID: log.address, tokenName: symbol, decimals },
+          sender: "0x" + log.topics[1].slice(-40),
+          recipient: "0x" + log.topics[2].slice(-40),
+          amount,
+          ...(isSrc20 ? { encryptedAmount: log.data } : {}),
+          transaction_hash: log.transactionHash,
+          timestamp: blockTimestamps.get(log.blockNumber),
+          success: true,
+        };
       })
     );
 
-    const transactions = sliced.map((log) => ({
-      type: TransactionType.FungibleToken,
-      tokenInfo: { tokenID: log.address, tokenName: log.address, decimals: 0 },
-      sender: "0x" + log.topics[1].slice(-40),
-      recipient: "0x" + log.topics[2].slice(-40),
-      amount: Number(BigInt(log.data || "0x0")),
-      transaction_hash: log.transactionHash,
-      timestamp: blockTimestamps.get(log.blockNumber),
-      success: true,
-    }));
-
-    return { transactions, fromBlock, toBlock };
+    return { transactions, fromBlock, toBlock, source: "eth_getLogs" };
   };
 
   /**
@@ -471,6 +609,92 @@ export class BlockchainApiService {
     return result;
   };
 
+  /**
+   * Decrypts the calldata of a Seismic type-0x4A SRC-20 transfer and returns the token amount.
+   *
+   * Seismic encrypts transfer(address,suint256) calldata with AES-GCM using
+   * ECDH(encryptionSk, tx.encryptionPubkey) as the shared key. The tx stores the
+   * nonce as `encryptionNonce`. After decryption the plaintext is standard ABI-encoded
+   * calldata: 4-byte selector + 32-byte recipient + 32-byte uint256 amount.
+   *
+   * @param txHash      - Transaction hash of the type-0x4A SRC-20 transfer
+   * @param encryptionSk - Vault's 32-byte encryption private key (hex)
+   * @param decimals    - Token decimals for human-readable conversion (default: 18)
+   * @returns Human-readable token amount, or null if decryption fails
+   */
+  /**
+   * Fetches and caches the Seismic TEE public key.
+   * Used as the network public key for ECDH key agreement during decryption.
+   */
+  private getTeePubkey = async (): Promise<string> => {
+    if (this.teePublicKey) return this.teePublicKey;
+    const result = await this.jsonRpc<string>("seismic_getTeePublicKey", []);
+    this.teePublicKey = result;
+    return result;
+  };
+
+  public decryptSrc20Amount = async (
+    txHash: string,
+    encryptionSk: Hex,
+    decimals: number = 18
+  ): Promise<number | null> => {
+    try {
+      const tx = await this.getTransactionByHash(txHash);
+      if (!tx) return null;
+
+      const input = tx.input as string | undefined;
+      const encryptionNonce = tx.encryptionNonce as Hex | undefined;
+
+      if (!input || !encryptionNonce || input === "0x") return null;
+
+      // Step 1: Derive AES key - ECDH(encryptionSk, networkTeePubkey) + HKDF
+      const networkTeePubkey = await this.getTeePubkey();
+      const { aesKey } = getEncryption(networkTeePubkey, encryptionSk);
+
+      // Step 2: Build AAD using seismic-viem's encodeSeismicMetadataAsAAD.
+      // Pass typed values (numbers/bigints) - the function handles zero encoding internally.
+      const encPubkey = (tx.encryptionPubkey as string).startsWith("0x")
+        ? (tx.encryptionPubkey as Hex)
+        : (`0x${tx.encryptionPubkey}` as Hex);
+
+      const aad = encodeSeismicMetadataAsAAD({
+        sender: tx.from as `0x${string}`,
+        legacyFields: {
+          chainId: parseInt(tx.chainId as string, 16),
+          nonce: parseInt(tx.nonce as string, 16),
+          to: (tx.to ?? "0x") as `0x${string}`,
+          value: BigInt((tx.value as string) ?? "0x0"),
+        },
+        seismicElements: {
+          encryptionPubkey: encPubkey,
+          encryptionNonce,
+          messageVersion: parseInt((tx.messageVersion as string) ?? "0x0", 16),
+          recentBlockHash: tx.recentBlockHash as Hex,
+          expiresAtBlock: BigInt(tx.expiresAtBlock as string),
+          signedRead: (tx.signedRead as boolean) ?? false,
+        },
+      });
+
+      // Step 3: Decrypt AES-GCM ciphertext
+      const aesCrypto = new AesGcmCrypto(aesKey);
+      const plaintext = await aesCrypto.decrypt(input as Hex, encryptionNonce, aad);
+
+      // ABI calldata: 0x{4-byte selector}{32-byte address}{32-byte uint256 amount}
+      const plain = plaintext.replace(/^0x/, "");
+      if (plain.length < 8 + 64 + 64) return null;
+
+      const amountHex = plain.slice(8 + 64, 8 + 64 + 64); // skip selector (4B) + recipient (32B)
+      const rawAmount = BigInt("0x" + amountHex);
+      const divisor = BigInt(10 ** decimals);
+      const whole = rawAmount / divisor;
+      const remainder = rawAmount % divisor;
+      return Number(whole) + Number(remainder) / 10 ** decimals;
+    } catch (err) {
+      this.logger.debug(`SRC-20 decryption failed for ${txHash}: ${(err as Error).message}`);
+      return null;
+    }
+  };
+
   // ─── Seismic shielded operations (seismic-viem) ──────────────────────────────
 
   /**
@@ -482,7 +706,7 @@ export class BlockchainApiService {
    * @param accountPrivateKey - The vault's private key proxy used as the signing key
    * @param encryptionSk      - 32-byte hex key for ECDH with the Seismic TEE.
    *                            Derived deterministically from a Fireblocks RAW signature
-   *                            via deriveKeyFromSignature — never stored on disk.
+   *                            via deriveKeyFromSignature - never stored on disk.
    */
   public createShieldedClient = async (
     accountOrPrivateKey: Hex | LocalAccount,
@@ -510,14 +734,14 @@ export class BlockchainApiService {
 
     this.logger.info(`Creating shielded client | rpc:${this.rpcUrl} | chainId:${this.chainId}`);
     const client = await createShieldedWalletClient(clientConfig);
-    this.logger.info("Shielded client created — TEE public key fetched");
+    this.logger.info("Shielded client created - TEE public key fetched");
     return client as SeismicClient;
   };
 
   /**
    * Creates a Seismic public client for read-only operations.
    *
-   * Unlike createShieldedClient, this does not require a private key — suitable for
+   * Unlike createShieldedClient, this does not require a private key - suitable for
    * readSrc20BalanceSigned where authorization comes from the Fireblocks-signed message
    * parameter, not the client's account.
    */
@@ -557,14 +781,14 @@ export class BlockchainApiService {
   /**
    * Reads a vault's SRC-20 balance using a Fireblocks MPC signature for authorization.
    *
-   * Used when the vault never holds a raw private key: the Fireblocks vault signs an
-   * EIP-191 message off-chain, and the SRC-20 contract verifies it via ecrecover.
+   * Uses a plain unsigned eth_call (via ShieldedPublicClient)
    *
-   * @param client          - Any seismic-viem client (used only for the RPC call)
-   * @param contractAddress - SRC-20 contract address
+   * @param client          - ShieldedPublicClient (read-only, no private key needed)
+   * @param contractAddress - SRC-20 contract address (must be a TestSRC20/SRC20-derived contract,
+   *                          not a plain ERC-20 - MockERC20 does not have balanceOfSigned)
    * @param ownerAddress    - Vault's Seismic/ETH address
    * @param signature       - 65-byte packed signature from FireblocksSigner.packSignature()
-   * @param expiry          - Unix timestamp from createExpiry() — must not be expired
+   * @param expiry          - Unix timestamp from createExpiry() - must not be expired
    */
   public readSrc20BalanceSigned = async (
     client: SeismicPublicClient,
@@ -612,14 +836,14 @@ export class BlockchainApiService {
       client,
     });
 
-    const txHash = await contract.write.transfer([to, amount]);
+    const txHash = await contract.write.transfer([to, amount], { gas: 200_000n });
     this.logger.info(`Shielded transfer submitted | txHash:${txHash}`);
     return txHash;
   };
 
   /**
    * Polls until the transaction is confirmed on Seismic.
-   * Default timeout is 60 seconds — increase for high-congestion periods.
+   * Default timeout is 60 seconds - increase for high-congestion periods.
    */
   public waitForReceipt = async (client: SeismicClient, txHash: Hex, timeoutMs = 60_000) => {
     this.logger.debug(`Waiting for receipt | txHash:${txHash}`);

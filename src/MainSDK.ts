@@ -141,6 +141,7 @@ export class MainSDK {
 
   public async getTransactionHistory(params: {
     vaultId: string;
+    type?: "native" | "erc20" | "src20" | "all";
     fromBlock?: string;
     toBlock?: string;
     contracts?: string[];
@@ -148,13 +149,28 @@ export class MainSDK {
     offset?: number;
   }) {
     const vaultData = await this.ensureVaultData(params.vaultId);
+
+    // For SRC-20, derive the encryption key so calldata can be decrypted client-side
+    let encryptionSk: Hex | undefined;
+    if (params.type === "src20") {
+      try {
+        encryptionSk = await this.deriveEncryptionKey(params.vaultId);
+      } catch (err) {
+        this.logger.warn(
+          `Could not derive encryption key for SRC-20 history — amounts will be 0: ${(err as Error).message}`
+        );
+      }
+    }
+
     return this.blockchainApiService.getTransactionHistory({
       address: vaultData.address,
+      type: params.type,
       fromBlock: params.fromBlock,
       toBlock: params.toBlock,
       contracts: params.contracts,
       limit: params.limit,
       offset: params.offset,
+      encryptionSk,
     });
   }
 
@@ -645,6 +661,12 @@ export class MainSDK {
       const sPadded = pad(`0x${sig.s.replace(/^0x/, "")}` as Hex, { size: 32 });
       const packedSignature = concat([rPadded, sPadded, toHex(v, { size: 1 })]);
 
+      // Use a plain unsigned eth_call via ShieldedPublicClient.
+      // balanceOfSigned does NOT check msg.sender (Seismic zeroes it for unsigned calls) —
+      // authorization comes entirely from the ecrecover check on packedSignature.
+      // Signed reads (type-0x4A → eth_call) are only needed for balance() which reads
+      // msg.sender's own balance; they also require the caller to have ETH for gas
+      // estimation, making them unsuitable here.
       const publicClient = this.blockchainApiService.createPublicClient();
       const rawBalance = await this.blockchainApiService.readSrc20BalanceSigned(
         publicClient,
@@ -654,7 +676,9 @@ export class MainSDK {
         expiry
       );
 
-      const balance = Number(rawBalance) / 10 ** 18;
+      const whole = rawBalance / BigInt(10 ** 18);
+      const remainder = rawBalance % BigInt(10 ** 18);
+      const balance = Number(whole) + Number(remainder) / 10 ** 18;
       return { success: true, balance };
     } catch (error) {
       this.logger.error(`Error fetching SRC-20 balance: ${formatErrorMessage(error)}`);
