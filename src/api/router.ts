@@ -189,6 +189,57 @@ export const configureRouter = (sdk: MainSDK): Router => {
 
   /**
    * @openapi
+   * /api/{vaultId}/src20/register-key:
+   *   post:
+   *     tags: [SRC-20]
+   *     summary: Register the vault's AES viewing key in the Seismic Directory precompile
+   *     description: |
+   *       One-time operation per vault address. After registration, all incoming SRC-20
+   *       Transfer events will have `encryptedAmount` encrypted to this vault's viewing key.
+   *     parameters:
+   *       - in: path
+   *         name: vaultId
+   *         required: true
+   *         schema:
+   *           type: string
+   *     responses:
+   *       200:
+   *         description: Viewing key registered
+   *       400:
+   *         description: Invalid vaultId
+   */
+  router.post(
+    "/:vaultId/src20/register-key",
+    validate({ params: vaultIdParam }),
+    controller.registerViewingKey
+  );
+
+  /**
+   * @openapi
+   * /api/{vaultId}/src20/key-status:
+   *   get:
+   *     tags: [SRC-20]
+   *     summary: Check if the vault has a viewing key registered in the Seismic Directory
+   *     parameters:
+   *       - in: path
+   *         name: vaultId
+   *         required: true
+   *         schema:
+   *           type: string
+   *     responses:
+   *       200:
+   *         description: Registration status
+   *       400:
+   *         description: Invalid vaultId
+   */
+  router.get(
+    "/:vaultId/src20/key-status",
+    validate({ params: vaultIdParam }),
+    controller.checkViewingKeyStatus
+  );
+
+  /**
+   * @openapi
    * /api/{vaultId}/transactions:
    *   get:
    *     tags: [Transaction History]

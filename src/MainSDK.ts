@@ -112,14 +112,22 @@ export class MainSDK {
   }) {
     const vaultData = await this.ensureVaultData(params.vaultId);
 
-    // For SRC-20, derive the encryption key so calldata can be decrypted client-side
     let encryptionSk: Hex | undefined;
-    if (params.type === "src20") {
+    let viewingKey: Hex | undefined;
+
+    if (params.type === "src20" || params.type === "all") {
       try {
+        // Viewing key path: decrypt amounts directly from Transfer event data (zero N+1).
+        // Only available after the vault has called registerViewingKey() once.
+        const isRegistered = await this.checkViewingKeyRegistered(params.vaultId);
+        if (isRegistered) {
+          // Viewing key decrypts received transfers from event data.
+          viewingKey = await this.deriveViewingKey(params.vaultId);
+        }
         encryptionSk = await this.deriveEncryptionKey(params.vaultId);
       } catch (err) {
         this.logger.warn(
-          `Could not derive encryption key for SRC-20 history - amounts will be 0: ${(err as Error).message}`
+          `Could not derive keys for SRC-20 history - amounts will be 0: ${(err as Error).message}`
         );
       }
     }
@@ -133,6 +141,7 @@ export class MainSDK {
       limit: params.limit,
       offset: params.offset,
       encryptionSk,
+      viewingKey,
     });
   }
 
@@ -649,6 +658,99 @@ export class MainSDK {
   };
 
   /**
+   * Derives the deterministic AES viewing key for a vault.
+   *
+   * Register this key once via registerViewingKey() so Transfer events are encrypted to it.
+   */
+  public deriveViewingKey = async (vaultId: string): Promise<Hex> => {
+    const vaultData = await this.ensureVaultData(vaultId);
+    if (vaultData.viewingKey) return vaultData.viewingKey as Hex;
+    const encryptionSk = await this.deriveEncryptionKey(vaultId);
+    const viewingKey = keccak256(encryptionSk);
+    vaultData.viewingKey = viewingKey;
+    return viewingKey;
+  };
+
+  /**
+   * Registers the vault's viewing key in the Seismic Directory precompile.
+   *
+   * One-time operation per address. After registration, all incoming SRC-20 Transfer
+   * events will have encryptedAmount encrypted to this key - enabling getTransactionHistory
+   * to return plaintext amounts for both sent and received transfers with zero extra RPC calls.
+   *
+   * @param vaultId - Fireblocks vault account ID
+   */
+  public registerViewingKey = async (vaultId: string): Promise<CreateTransactionResponse> => {
+    try {
+      const vaultData = await this.ensureVaultData(vaultId);
+      const encryptionSk = await this.deriveEncryptionKey(vaultId);
+      const viewingKey = await this.deriveViewingKey(vaultId);
+
+      const fireblocksAccount = toAccount({
+        address: vaultData.address as Address,
+        signMessage: async () => {
+          throw new Error("signMessage not supported for Fireblocks account");
+        },
+        signTypedData: async () => {
+          throw new Error("signTypedData not supported for Fireblocks account");
+        },
+        signTransaction: async (transaction, options) => {
+          const serialize = (options?.serializer ?? serializeTransaction) as (
+            tx: unknown,
+            sig?: unknown
+          ) => Hex;
+          const serialized = serialize(transaction);
+          const hash = keccak256(serialized);
+          const signedMsg = await this.fireblocksService.signTransaction(
+            hash.slice(2),
+            vaultId,
+            "register-viewing-key"
+          );
+          const sig = signedMsg.signature;
+          if (!sig?.r || !sig?.s || sig.v === undefined) {
+            throw new Error("Incomplete signature from Fireblocks");
+          }
+          const r = `0x${sig.r.replace(/^0x/, "").padStart(64, "0")}` as Hex;
+          const s = `0x${sig.s.replace(/^0x/, "").padStart(64, "0")}` as Hex;
+          const v = BigInt(sig.v < 27 ? sig.v : sig.v - 27);
+          return serialize(transaction, { r, s, v });
+        },
+      });
+
+      const client = await this.blockchainApiService.createShieldedClient(
+        fireblocksAccount,
+        encryptionSk
+      );
+
+      const txHash = await this.blockchainApiService.registerViewingKey(client, viewingKey);
+      vaultData.viewingKeyRegistered = true; // cache so next getTransactionHistory skips RPC check
+      this.logger.info(`Viewing key registered | vault:${vaultId} | tx:${txHash}`);
+      return { success: true, txHash };
+    } catch (error) {
+      this.logger.error(`Failed to register viewing key: ${formatErrorMessage(error)}`);
+      return { success: false, error: formatErrorMessage(error) };
+    }
+  };
+
+  /**
+   * Returns whether this vault's address has a viewing key registered in the Directory.
+   *
+   * Caches a `true` result permanently - the Directory is append-only so once registered
+   * it never un-registers. An `undefined` or `false` result triggers a fresh RPC check.
+   *
+   * @param vaultId - Fireblocks vault account ID
+   */
+  public checkViewingKeyRegistered = async (vaultId: string): Promise<boolean> => {
+    const vaultData = await this.ensureVaultData(vaultId);
+    if (vaultData.viewingKeyRegistered === true) return true;
+    const registered = await this.blockchainApiService.checkViewingKeyRegistered(
+      vaultData.address as Address
+    );
+    if (registered) vaultData.viewingKeyRegistered = true;
+    return registered;
+  };
+
+  /**
    * Submits an encrypted SRC-20 shielded transfer (Seismic type-0x4A transaction).
    *
    * Flow:
@@ -704,7 +806,7 @@ export class MainSDK {
           }
           const r = `0x${sig.r.replace(/^0x/, "").padStart(64, "0")}` as Hex;
           const s = `0x${sig.s.replace(/^0x/, "").padStart(64, "0")}` as Hex;
-          const v = sig.v < 27 ? sig.v : sig.v - 27;
+          const v = BigInt(sig.v < 27 ? sig.v : sig.v - 27);
           return serialize(transaction, { r, s, v });
         },
       });
@@ -741,10 +843,12 @@ export class MainSDK {
    */
   public async shutdown(): Promise<void> {
     this.logger.info("Shutting down MainSDK...");
-    // Zero encryptionSk values before clearing - defense-in-depth against memory scraping
     for (const vaultData of this.vaultData.values()) {
       if (vaultData.encryptionSk) {
         vaultData.encryptionSk = "0".repeat(vaultData.encryptionSk.length);
+      }
+      if (vaultData.viewingKey) {
+        vaultData.viewingKey = "0".repeat(vaultData.viewingKey.length);
       }
     }
     this.vaultData.clear();

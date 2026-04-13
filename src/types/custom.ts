@@ -114,6 +114,12 @@ export type GetTransactionHistoryFromIndexerOpts = {
    * Derive this via MainSDK.deriveEncryptionKey(vaultId).
    */
   encryptionSk?: Hex;
+  /**
+   * AES viewing key (32-byte hex) registered in the Seismic Directory precompile.
+   * When provided, amounts are decrypted directly from Transfer event data - no per-tx RPC calls.
+   * Takes priority over encryptionSk. Derive via MainSDK.deriveViewingKey(vaultId).
+   */
+  viewingKey?: Hex;
 };
 
 export type GetTransactionHistoryParams =
@@ -210,6 +216,8 @@ export interface VaultData {
   address: string;
   publicKey: string;
   encryptionSk?: string; // 32-byte hex; in-memory only, zeroed on shutdown
+  viewingKey?: string; // keccak256(encryptionSk); in-memory only, zeroed on shutdown
+  viewingKeyRegistered?: boolean; // cached Directory registration status
 }
 
 /**

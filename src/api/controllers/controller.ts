@@ -203,6 +203,35 @@ export class ApiController {
   };
 
   /**
+   * POST /api/:vaultId/src20/register-key
+   * Registers the vault's AES viewing key in the Seismic Directory precompile.
+   * One-time operation. After registration, Transfer events are encrypted to this key.
+   */
+  public registerViewingKey = async (req: Request, res: Response) => {
+    const { vaultId } = req.params;
+    try {
+      const result = await this.sdk.registerViewingKey(vaultId);
+      res.status(200).json(result);
+    } catch (error) {
+      this.handleError(error, res, "registerViewingKey");
+    }
+  };
+
+  /**
+   * GET /api/:vaultId/src20/key-status
+   * Returns whether the vault has a viewing key registered in the Seismic Directory.
+   */
+  public checkViewingKeyStatus = async (req: Request, res: Response) => {
+    const { vaultId } = req.params;
+    try {
+      const registered = await this.sdk.checkViewingKeyRegistered(vaultId);
+      res.status(200).json({ success: true, data: { vaultId, registered } });
+    } catch (error) {
+      this.handleError(error, res, "checkViewingKeyStatus");
+    }
+  };
+
+  /**
    * GET /api/contracts/:contractAddress
    * Returns ERC-20 metadata: name, symbol, decimals, totalSupply.
    */

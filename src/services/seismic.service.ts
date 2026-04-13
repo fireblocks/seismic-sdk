@@ -20,6 +20,11 @@ import {
   AesGcmCrypto,
   encodeSeismicMetadataAsAAD,
   seismicDevnet2,
+  computeKeyHash,
+  checkRegistration,
+  shieldedWriteContract,
+  DIRECTORY_ADDRESS,
+  DirectoryAbi,
   type ShieldedPublicClient,
   type ShieldedWalletClient,
   type GetSeismicClientsParameters,
@@ -391,7 +396,15 @@ export class BlockchainApiService {
     toBlock: string;
     source: string;
   }> => {
-    const { address, contracts, limit = 50, offset = 0, type = "erc20", encryptionSk } = params;
+    const {
+      address,
+      contracts,
+      limit = 50,
+      offset = 0,
+      type = "erc20",
+      encryptionSk,
+      viewingKey,
+    } = params;
 
     if (!validateAddress(address)) {
       throw this.errorHandler.handleApiError(
@@ -504,8 +517,113 @@ export class BlockchainApiService {
       }
     }
 
+    const isSrc20 = type === "src20";
     const paddedAddress = "0x" + address.slice(2).toLowerCase().padStart(64, "0");
-    const transferTopic = type === "src20" ? SRC20_TRANSFER_TOPIC : ERC20_TRANSFER_TOPIC;
+    const transferTopic = isSrc20 ? SRC20_TRANSFER_TOPIC : ERC20_TRANSFER_TOPIC;
+
+    // ── Viewing key path (SRC-20 received transfers) ────────────────────────
+    if (isSrc20 && viewingKey) {
+      const keyHash = computeKeyHash(viewingKey);
+      const baseFilter = {
+        fromBlock,
+        toBlock,
+        ...(contracts?.length ? { address: contracts } : {}),
+      };
+
+      // Fetch received events and sent events in parallel.
+      const [sentLogs, receivedLogs] = await Promise.all([
+        this.jsonRpc<EthLog[]>("eth_getLogs", [
+          { ...baseFilter, topics: [transferTopic, paddedAddress] },
+        ]),
+        this.jsonRpc<EthLog[]>("eth_getLogs", [
+          { ...baseFilter, topics: [transferTopic, null, paddedAddress, keyHash] },
+        ]),
+      ]);
+
+      // Deduplicate (self-transfers appear in both)
+      const seen = new Set<string>();
+      const allLogs = [...receivedLogs, ...sentLogs].filter((log) => {
+        const key = `${log.transactionHash}-${log.logIndex}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+
+      allLogs.sort((a, b) => parseInt(b.blockNumber, 16) - parseInt(a.blockNumber, 16));
+      const sliced = allLogs.slice(offset, offset + limit);
+
+      const uniqueBlocks = [...new Set(sliced.map((l) => l.blockNumber))];
+      const uniqueContracts = [...new Set(sliced.map((l) => l.address))];
+      const blockTimestamps = new Map<string, number>();
+      const tokenDecimals = new Map<string, number>();
+      const tokenSymbols = new Map<string, string>();
+
+      await Promise.all([
+        ...uniqueBlocks.map(async (blockNum) => {
+          const block = await this.jsonRpc<{ timestamp: string } | null>("eth_getBlockByNumber", [
+            blockNum,
+            false,
+          ]);
+          if (block) blockTimestamps.set(blockNum, parseInt(block.timestamp, 16));
+        }),
+        ...uniqueContracts.map(async (contractAddr) => {
+          const info = await this.getErc20Info(contractAddr);
+          tokenDecimals.set(contractAddr, info.decimals ?? DEFAULT_TOKEN_DECIMALS);
+          tokenSymbols.set(contractAddr, info.symbol ?? contractAddr);
+        }),
+      ]);
+
+      const receivedSet = new Set(receivedLogs.map((l) => `${l.transactionHash}-${l.logIndex}`));
+
+      const transactions = await Promise.all(
+        sliced.map(async (log) => {
+          const decimals = tokenDecimals.get(log.address) ?? DEFAULT_TOKEN_DECIMALS;
+          const symbol = tokenSymbols.get(log.address) ?? log.address;
+          const logKey = `${log.transactionHash}-${log.logIndex}`;
+
+          let amount = 0;
+
+          if (receivedSet.has(logKey)) {
+            // Received transfer: encryptedAmount in event data is encrypted to our viewing key.
+            // log.data is ABI-encoded bytes: 32-byte offset + 32-byte length + actual bytes.
+            // decode to get the raw encrypted bytes before splitting nonce/ciphertext.
+            const dataHex = (log.data as string).slice(2); // strip "0x"
+            const byteLength = parseInt(dataHex.slice(64, 128), 16); // 32-byte length field
+            const encryptedData = "0x" + dataHex.slice(128, 128 + byteLength * 2);
+            // parseEncryptedData logic: last 24 hex chars = 12-byte nonce, rest = ciphertext
+            const nonce = ("0x" + encryptedData.slice(-24)) as Hex;
+            const encryptedPart = encryptedData.slice(0, encryptedData.length - 24) as Hex;
+            try {
+              const plaintext = await new AesGcmCrypto(viewingKey).decrypt(encryptedPart, nonce);
+              const rawAmount = BigInt(plaintext);
+              const divisor = BigInt(10 ** decimals);
+              amount = Number(rawAmount / divisor) + Number(rawAmount % divisor) / 10 ** decimals;
+            } catch {
+              // encryptedAmount was empty or used a different key
+            }
+          } else if (encryptionSk) {
+            // Sent transfer: event data is encrypted to recipient's key.
+            // Decrypt via ECDH on calldata.
+            const decrypted = await this.decryptSrc20Amount(log.transactionHash, encryptionSk, decimals);
+            if (decrypted !== null) amount = decrypted;
+          }
+
+          return {
+            type: TransactionType.FungibleToken,
+            tokenInfo: { tokenID: log.address, tokenName: symbol, decimals },
+            sender: "0x" + log.topics[1].slice(-40),
+            recipient: "0x" + log.topics[2].slice(-40),
+            amount,
+            encryptedAmount: log.data,
+            transaction_hash: log.transactionHash,
+            timestamp: blockTimestamps.get(log.blockNumber),
+            success: true,
+          };
+        })
+      );
+
+      return { transactions, fromBlock, toBlock, source: "eth_getLogs-viewing-key" };
+    }
 
     const baseFilter = {
       fromBlock,
@@ -557,8 +675,6 @@ export class BlockchainApiService {
         tokenSymbols.set(contractAddr, info.symbol ?? contractAddr);
       }),
     ]);
-
-    const isSrc20 = type === "src20";
 
     const transactions = await Promise.all(
       sliced.map(async (log) => {
@@ -693,6 +809,42 @@ export class BlockchainApiService {
       this.logger.debug(`SRC-20 decryption failed for ${txHash}: ${(err as Error).message}`);
       return null;
     }
+  };
+
+  // ─── Viewing key (Directory precompile) ─────────────────────────────────────
+
+  /**
+   * Registers an AES viewing key in the Seismic Directory precompile for a given address.
+   * After registration, Transfer events for that address will have `encryptedAmount`
+   *
+   * @param client     - ShieldedWalletClient for the vault (signs the Directory write)
+   * @param viewingKey - 32-byte AES key (hex). Derive via keccak256(encryptionSk).
+   * @returns Transaction hash of the registration
+   */
+  public registerViewingKey = async (client: SeismicClient, viewingKey: Hex): Promise<Hex> => {
+    this.logger.info("Registering viewing key in Directory precompile");
+    // Call shieldedWriteContract directly (instead of registerKey) so we can pass explicit gas
+    // and gasPrice.
+    const hexGasPrice = await this.jsonRpc<string>("eth_gasPrice", []);
+    const gasPrice = BigInt(hexGasPrice);
+    return shieldedWriteContract(client, {
+      address: DIRECTORY_ADDRESS,
+      abi: DirectoryAbi,
+      functionName: "setKey",
+      args: [BigInt(viewingKey)],
+      gas: 200_000n,
+      gasPrice,
+    });
+  };
+
+  /**
+   * Returns whether an address has a viewing key registered in the Directory precompile.
+   *
+   * @param address - The Seismic/ETH address to check
+   */
+  public checkViewingKeyRegistered = async (address: Address): Promise<boolean> => {
+    const publicClient = this.createPublicClient();
+    return checkRegistration(publicClient as unknown as SeismicClient, address);
   };
 
   // ─── Seismic shielded operations (seismic-viem) ──────────────────────────────
@@ -836,7 +988,9 @@ export class BlockchainApiService {
       client,
     });
 
-    const txHash = await contract.write.transfer([to, amount], { gas: 200_000n });
+    const hexGasPrice = await this.jsonRpc<string>("eth_gasPrice", []);
+    const gasPrice = BigInt(hexGasPrice);
+    const txHash = await contract.write.transfer([to, amount], { gas: 200_000n, gasPrice });
     this.logger.info(`Shielded transfer submitted | txHash:${txHash}`);
     return txHash;
   };
