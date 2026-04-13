@@ -40,47 +40,9 @@ import { buildBalanceReadMessage, createExpiry } from "./seismic/signature.js";
  * Configuration for MainSDK
  */
 export interface MainSDKConfig extends FireblocksConfig {
-  /** Optional custom logger instance */
   logger?: Logger;
 }
 
-/**
- * Main SDK for Custom Development
- *
- * This is the primary entry point for the SDK framework. It provides:
- * - A single shared instance of FireblocksService and BlockchainApiService
- * - Lazy per-vault initialization: address and public key are resolved on first use
- *   and cached in an internal map keyed by vault account ID
- * - Type-safe operations for address management and transactions
- * - Optional Express REST API integration
- * - Built-in resilience patterns (retry, circuit breaker)
- *
- * @example
- * ```typescript
- * // Basic usage
- * const sdk = new MainSDK({
- *   apiKey: process.env.FIREBLOCKS_API_KEY!,
- *   apiSecret: process.env.FIREBLOCKS_SECRET_KEY!,
- *   basePath: BasePath.US
- * });
- *
- * // Get address for a vault
- * const address = await sdk.getVaultAccountAddress('vault-123', 'BTC', 0);
- *
- * // Submit a transaction
- * const result = await sdk.submitTransaction('vault-123', {
- *   operation: TransactionOperation.TRANSFER,
- *   source: { type: 'VAULT_ACCOUNT', id: 'vault-123' },
- *   destination: { type: 'ONE_TIME_ADDRESS', oneTimeAddress: { address: '0x...' } },
- *   assetId: 'ETH',
- *   amount: '0.1'
- * });
- *
- * // Access services directly
- * const fireblocksService = sdk.getFireblocksService();
- * const blockchainService = sdk.getBlockchainApiService();
- * ```
- */
 export class MainSDK {
   private readonly fireblocksService: FireblocksService;
   private readonly blockchainApiService: BlockchainApiService;

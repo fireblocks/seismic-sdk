@@ -10,7 +10,7 @@ import { configureRouter } from "./api/router.js";
 const logger = new Logger("app:server-setup");
 
 const startServer = () => {
-  // Validate required environment variables, additional variables can be added as needed
+  // Validate required environment variables
   (() => {
     ["FIREBLOCKS_API_USER_KEY", "FIREBLOCKS_API_USER_SECRET_KEY_PATH"].forEach((key) => {
       if (process.env[key] === undefined || process.env[key] === "") {
@@ -21,7 +21,6 @@ const startServer = () => {
 
   const app = express();
 
-  // Configure body parsing middlewares ONLY
   app.use(express.json());
   app.use(express.urlencoded({ extended: true }));
   app.use(errorHandler);
@@ -59,7 +58,7 @@ const startServer = () => {
     res.status(200).send("Alive");
   });
 
-  // Swagger documentation endpoints (lazy loaded)
+  // Swagger documentation endpoints
   const swaggerSpec = getSwaggerSpec();
   app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
   app.get("/api-docs-json", (_req, res) => {
