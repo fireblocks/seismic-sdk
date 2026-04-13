@@ -286,15 +286,44 @@ export const configureRouter = (sdk: MainSDK): Router => {
    *         name: limit
    *         schema:
    *           type: integer
-   *         description: Maximum number of results to return.
+   *           default: 50
+   *         description: Maximum number of results to return per page.
    *       - in: query
    *         name: offset
    *         schema:
    *           type: integer
+   *           default: 0
    *         description: Number of results to skip (for pagination).
    *     responses:
    *       200:
-   *         description: List of Transfer events
+   *         description: List of Transfer events with pagination metadata
+   *         content:
+   *           application/json:
+   *             schema:
+   *               type: object
+   *               properties:
+   *                 success:
+   *                   type: boolean
+   *                 data:
+   *                   type: array
+   *                 meta:
+   *                   type: object
+   *                   properties:
+   *                     count:
+   *                       type: integer
+   *                       description: Number of items in this page
+   *                     total:
+   *                       type: integer
+   *                       description: Total matching items across all pages
+   *                     limit:
+   *                       type: integer
+   *                     offset:
+   *                       type: integer
+   *                     hasMore:
+   *                       type: boolean
+   *                       description: True if there are more pages after this one
+   *                     source:
+   *                       type: string
    *       400:
    *         description: Invalid parameters
    */

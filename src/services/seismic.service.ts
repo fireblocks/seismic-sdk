@@ -395,6 +395,7 @@ export class BlockchainApiService {
     fromBlock: string;
     toBlock: string;
     source: string;
+    total: number; // total matching events before pagination
   }> => {
     const {
       address,
@@ -423,7 +424,13 @@ export class BlockchainApiService {
       // native has no fallback - ETH transfers emit no logs, only the explorer can provide them
       if (type === "native") {
         const transactions = await explorer.getNativeTransactions(address, limit, offset);
-        return { transactions, fromBlock: "0", toBlock: "latest", source: "socialscan-txlist" };
+        return {
+          transactions,
+          fromBlock: "0",
+          toBlock: "latest",
+          source: "socialscan-txlist",
+          total: transactions.length,
+        };
       }
 
       if (type === "src20") {
@@ -442,11 +449,13 @@ export class BlockchainApiService {
             )
           ).flat();
           allTxs.sort((a, b) => (b.timestamp as number) - (a.timestamp as number));
+          const src20Page = allTxs.slice(0, limit);
           return {
-            transactions: allTxs.slice(0, limit),
+            transactions: src20Page,
             fromBlock: "0",
             toBlock: "latest",
             source: "socialscan-getlogs-src20",
+            total: allTxs.length,
           };
         } catch (explorerErr) {
           this.logger.warn(
@@ -464,11 +473,13 @@ export class BlockchainApiService {
         const merged = [...native, ...erc20].sort(
           (a, b) => (b.timestamp as number) - (a.timestamp as number)
         );
+        const allPage = merged.slice(0, limit);
         return {
-          transactions: merged.slice(0, limit),
+          transactions: allPage,
           fromBlock: "0",
           toBlock: "latest",
           source: "socialscan-txlist+tokentx",
+          total: merged.length,
         };
       }
 
@@ -480,7 +491,13 @@ export class BlockchainApiService {
           limit,
           offset
         );
-        return { transactions, fromBlock: "0", toBlock: "latest", source: "socialscan-tokentx" };
+        return {
+          transactions,
+          fromBlock: "0",
+          toBlock: "latest",
+          source: "socialscan-tokentx",
+          total: transactions.length,
+        };
       } catch (explorerErr) {
         this.logger.warn(
           `SocialScan unavailable (${(explorerErr as Error).message}), falling back to eth_getLogs`
@@ -604,7 +621,11 @@ export class BlockchainApiService {
           } else if (encryptionSk) {
             // Sent transfer: event data is encrypted to recipient's key.
             // Decrypt via ECDH on calldata.
-            const decrypted = await this.decryptSrc20Amount(log.transactionHash, encryptionSk, decimals);
+            const decrypted = await this.decryptSrc20Amount(
+              log.transactionHash,
+              encryptionSk,
+              decimals
+            );
             if (decrypted !== null) amount = decrypted;
           }
 
@@ -622,7 +643,13 @@ export class BlockchainApiService {
         })
       );
 
-      return { transactions, fromBlock, toBlock, source: "eth_getLogs-viewing-key" };
+      return {
+        transactions,
+        fromBlock,
+        toBlock,
+        source: "eth_getLogs-viewing-key",
+        total: allLogs.length,
+      };
     }
 
     const baseFilter = {
@@ -711,7 +738,7 @@ export class BlockchainApiService {
       })
     );
 
-    return { transactions, fromBlock, toBlock, source: "eth_getLogs" };
+    return { transactions, fromBlock, toBlock, source: "eth_getLogs", total: allLogs.length };
   };
 
   /**

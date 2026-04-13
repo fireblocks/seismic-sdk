@@ -112,14 +112,16 @@ export class ApiController {
           ? (contracts as string[])
           : contracts.split(",").map((s) => s.trim())
         : undefined;
+      const parsedLimit = limit !== undefined ? parseInt(limit) : 50;
+      const parsedOffset = offset !== undefined ? parseInt(offset) : 0;
       const result = await this.sdk.getTransactionHistory({
         vaultId,
         type: (type as "native" | "erc20" | "src20" | "all") ?? "erc20",
         fromBlock,
         toBlock,
         contracts: contractList,
-        limit: limit !== undefined ? parseInt(limit) : undefined,
-        offset: offset !== undefined ? parseInt(offset) : undefined,
+        limit: parsedLimit,
+        offset: parsedOffset,
       });
       res.status(200).json({
         success: true,
@@ -129,6 +131,10 @@ export class ApiController {
           scannedFromBlock: result.fromBlock,
           scannedToBlock: result.toBlock,
           count: result.transactions.length,
+          total: result.total,
+          limit: parsedLimit,
+          offset: parsedOffset,
+          hasMore: parsedOffset + result.transactions.length < result.total,
         },
       });
     } catch (error) {
