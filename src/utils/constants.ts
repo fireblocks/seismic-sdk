@@ -1,4 +1,3 @@
-import { SignedMessageAlgorithmEnum } from "@fireblocks/ts-sdk";
 import { keccak256 } from "viem";
 import { TokenInfo, TokenType } from "../types/index.js";
 
@@ -13,14 +12,12 @@ export const derivationPath = {
   addressIndex: 0,
 };
 
-export const signingAlgorithm = SignedMessageAlgorithmEnum.EcdsaSecp256K1;
-
 /**
  * Fireblocks asset ID used for RAW signing.
  *
  * Seismic is not natively supported by Fireblocks, so we use RAW signing to sign
  * arbitrary payloads with the vault's secp256k1 key. RAW signing is a multi-asset
- * Fireblocks feature — the asset ID is a routing mechanism, not a cryptographic choice.
+ * Fireblocks feature - the asset ID is a routing mechanism, not a cryptographic choice.
  * "BTC_TEST" is the standard Fireblocks asset for arbitrary RAW signing.
  */
 export const FIREBLOCKS_RAW_SIGN_ASSET_ID = "BTC_TEST";
@@ -30,7 +27,7 @@ export const FIREBLOCKS_RAW_SIGN_ASSET_ID = "BTC_TEST";
  */
 export const SEISMIC_CHAIN_ID = {
   testnet: 5124,
-  // mainnet: not yet live
+  mainnet: 0, // placeholder, update when Seismic mainnet launches
 } as const;
 
 /**
@@ -39,13 +36,11 @@ export const SEISMIC_CHAIN_ID = {
 export const api_constants = {
   mainnet_rpc: "", // Seismic mainnet not yet live
   testnet_rpc: "https://gcp-1.seismictest.net/rpc",
-  testnet_explorer: "https://seismic-testnet.socialscan.io/",
-  mainnet_explorer: "",
 };
 
 /**
  * Native coin info for Seismic.
- * Seismic's native asset is ETH — it is an EVM-compatible L1.
+ * Seismic's native asset is ETH - it is an EVM-compatible L1.
  */
 export const chain_info = {
   coinDecimals: 18,
@@ -55,10 +50,10 @@ export const chain_info = {
 /**
  * Fixed 32-byte seed message used for deterministic encryption key derivation.
  *
- * Fireblocks MPC signatures are deterministic: signing the same message from the
- * same vault always returns the same signature without re-approval. We exploit this
- * to derive a reproducible encryptionSk (SHA-256 of the signature) that acts as the
- * client's private key for ECDH with the Seismic TEE — no persistent key storage needed.
+ * Fireblocks signatures are deterministic: signing the same message from the
+ * same vault always returns the same signature without re-approval.
+ * We derive a reproducible encryptionSk (SHA-256 of the signature) that acts as the
+ * client's private key for ECDH with the Seismic TEE - no persistent key storage needed.
  *
  * This constant must never change once deployed (changing it invalidates all derived keys).
  */
@@ -80,7 +75,31 @@ export const DEFAULT_TOKEN_DECIMALS = 18;
  * ERC-20 Transfer event topic: keccak256("Transfer(address,address,uint256)")
  * Used as topics[0] filter in eth_getLogs to find token transfer events.
  */
-export const ERC20_TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+export const ERC20_TRANSFER_TOPIC =
+  "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+
+/**
+ * SRC-20 Transfer event topic: keccak256("Transfer(address,address,bytes32,bytes)")
+ * Seismic's privacy-preserving ERC-20 emits a different Transfer signature - the amount
+ * is AES-GCM encrypted and stored as bytes. Standard ERC-20 indexers (tokentx) will not
+ * pick up SRC-20 transfers; use getLogs with this topic instead.
+ */
+export const SRC20_TRANSFER_TOPIC = keccak256(
+  new TextEncoder().encode("Transfer(address,address,bytes32,bytes)")
+);
+
+/**
+ * SocialScan Explorer API base URLs.
+ * Supports: txlist (native ETH), txlistinternal, tokentx (ERC-20), getLogs (SRC-20).
+ * Requires SOCIALSCAN_API_KEY env var (get a key at developer.socialscan.io).
+ *
+ * NOTE: Only testnet is currently available - mainnet URL is a placeholder for when
+ * Seismic mainnet launches and SocialScan adds support.
+ */
+export const SOCIALSCAN_API_URL = {
+  testnet: "https://api.socialscan.io/seismic-testnet/v1/developer/api",
+  mainnet: "", // not yet available
+} as const;
 
 export const ERC20_SELECTORS = {
   name: "0x06fdde03", // name()
