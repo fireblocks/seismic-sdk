@@ -103,6 +103,18 @@ export type GetTransactionHistoryFromIndexerOpts = {
   fromBlock?: string;
   /** Hex block number or "earliest"/"latest". Defaults to "latest". */
   toBlock?: string;
+  /**
+   * Return transactions on or before this date (YYYY-MM-DD).
+   * Converted internally to an approximate block number using the current block and ~120ms block time.
+   * Overrides toBlock if both are provided.
+   */
+  before?: string;
+  /**
+   * Return transactions on or after this date (YYYY-MM-DD).
+   * Converted internally to an approximate block number using the current block and ~120ms block time.
+   * Overrides fromBlock if both are provided.
+   */
+  after?: string;
   /** Optional contract addresses to filter by. If omitted, scans all contracts. */
   contracts?: string[];
   limit?: number;
@@ -163,7 +175,7 @@ export type Transaction = {
   /** Raw AES-GCM ciphertext from a SRC-20 Transfer event. Present only for SRC-20 txs. */
   encryptedAmount?: string;
   transaction_hash: string;
-  timestamp?: string | number;
+  timestamp?: string; // ISO-8601 date string
   success: boolean;
 };
 
