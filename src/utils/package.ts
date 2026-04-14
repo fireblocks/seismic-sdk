@@ -41,7 +41,7 @@ let packageJsonCache: PackageJson | null = null;
  * @returns Parsed package.json object
  * @throws Error if package.json cannot be read or parsed
  */
-export function getPackageJson(): PackageJson {
+export const getPackageJson = (): PackageJson => {
   if (!packageJsonCache) {
     try {
       const packageJsonPath = join(__dirname, "../../package.json");
@@ -52,28 +52,28 @@ export function getPackageJson(): PackageJson {
     }
   }
   return packageJsonCache;
-}
+};
 
 /**
  * Get the package name
  * @returns Package name from package.json
  */
-export function getPackageName(): string {
+export const getPackageName = (): string => {
   return getPackageJson().name;
-}
+};
 
 /**
  * Get the package version
  * @returns Package version from package.json
  */
-export function getPackageVersion(): string {
+export const getPackageVersion = (): string => {
   return getPackageJson().version;
-}
+};
 
 /**
  * Get the package description
  * @returns Package description from package.json or empty string if not set
  */
-export function getPackageDescription(): string {
+export const getPackageDescription = (): string => {
   return getPackageJson().description || "";
-}
+};

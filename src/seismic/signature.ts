@@ -26,7 +26,7 @@ import { type Hex, type Address, keccak256, encodePacked } from "viem";
  * @param expiry - Unix timestamp (seconds) after which the signature is invalid
  * @returns 32-byte EIP-191 signed hash - pass this directly to FireblocksSigner.rawSign()
  */
-export function buildBalanceReadMessage(owner: Address, expiry: bigint): Hex {
+export const buildBalanceReadMessage = (owner: Address, expiry: bigint): Hex => {
   const inner = keccak256(
     encodePacked(["string", "address", "uint256"], ["SRC20_BALANCE_READ", owner, expiry])
   );
@@ -34,7 +34,7 @@ export function buildBalanceReadMessage(owner: Address, expiry: bigint): Hex {
   return keccak256(
     encodePacked(["string", "bytes32"], ["\x19Ethereum Signed Message:\n32", inner])
   );
-}
+};
 
 /**
  * Creates an expiry timestamp for a signed balance read.
@@ -43,6 +43,6 @@ export function buildBalanceReadMessage(owner: Address, expiry: bigint): Hex {
  * @param hoursFromNow - How many hours until the signature expires (default 1)
  * @returns Unix timestamp as bigint
  */
-export function createExpiry(hoursFromNow: number = 1): bigint {
+export const createExpiry = (hoursFromNow: number = 1): bigint => {
   return BigInt(Math.floor(Date.now() / 1000) + hoursFromNow * 3600);
-}
+};

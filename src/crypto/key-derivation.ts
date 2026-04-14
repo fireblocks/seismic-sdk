@@ -1,5 +1,5 @@
 import { type Hex, bytesToHex, hexToBytes } from "viem";
-import { sha256 } from "@noble/hashes/sha256";
+import { sha256 } from "@noble/hashes/sha2";
 
 /**
  * Derives a deterministic AES-256 encryption key from a Fireblocks RAW signature.
@@ -25,8 +25,8 @@ import { sha256 } from "@noble/hashes/sha256";
  * @param fullSig - The `fullSig` field from a Fireblocks SignedMessage (hex string, with or without 0x)
  * @returns 32-byte hex key suitable for use as seismic-viem encryptionSk
  */
-export function deriveKeyFromSignature(fullSig: string): Hex {
+export const deriveKeyFromSignature = (fullSig: string): Hex => {
   const sigBytes = hexToBytes(fullSig.startsWith("0x") ? (fullSig as Hex) : `0x${fullSig}`);
   const hash = sha256(sigBytes);
   return bytesToHex(hash);
-}
+};
