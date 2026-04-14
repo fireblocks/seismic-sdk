@@ -6,6 +6,9 @@ import express, { Request, Response } from "express";
 import { config, Logger, getSwaggerSpec, swaggerUi } from "./utils/index.js";
 import { MainSDK } from "./MainSDK.js";
 import { configureRouter } from "./api/router.js";
+import { collectDefaultMetrics } from "prom-client";
+
+collectDefaultMetrics();
 
 const logger = new Logger("app:server-setup");
 
