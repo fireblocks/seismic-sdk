@@ -89,6 +89,54 @@ export class BlockchainApiService {
   /**
    * Sends a JSON-RPC request to the Seismic node.
    */
+  /**
+   * Converts a raw block timestamp (hex or decimal number) to an ISO-8601 date string.
+   * Seismic testnet block timestamps are in milliseconds; standard EVM chains use seconds.
+   */
+  private toIsoTimestamp(raw: string | number): string {
+    const ms = typeof raw === "string" ? parseInt(raw, 16) : raw;
+    return new Date(ms > 1e12 ? ms : ms * 1000)
+      .toISOString()
+      .replace("T", " ")
+      .replace(/\.\d{3}Z$/, " UTC");
+  }
+
+  // Seismic testnet block time — used for date → block number estimation.
+  private static readonly BLOCK_TIME_MS = 120;
+  // 300 windows × 99,000 blocks × 120ms ≈ 41 days — history depth before warning.
+  private static readonly MAX_HISTORY_MS = 300 * 99_000 * 120;
+
+  /**
+   * Converts a YYYY-MM-DD date string to an approximate block number.
+   * Uses current latest block and ~120ms block time to estimate.
+   *
+   * @param dateStr - Date in YYYY-MM-DD format
+   * @param edge    - "start" returns the block at the start of the day (00:00 UTC),
+   *                  "end" returns the block at the end of the day (23:59 UTC)
+   * @returns { blockHex, outOfRange } — blockHex is the estimated block as a hex string,
+   *          outOfRange is true if the date is older than ~41 days of stored history
+   */
+  private async dateToBlock(
+    dateStr: string,
+    edge: "start" | "end"
+  ): Promise<{ blockHex: string; outOfRange: boolean }> {
+    const latestHex = await this.jsonRpc<string>("eth_blockNumber", []);
+    const latestBlock = parseInt(latestHex, 16);
+
+    const date = new Date(dateStr + (edge === "start" ? "T00:00:00Z" : "T23:59:59Z"));
+    const nowMs = Date.now();
+    const diffMs = nowMs - date.getTime();
+
+    // Future date → clamp to latest block
+    if (diffMs < 0) return { blockHex: latestHex, outOfRange: false };
+
+    const blocksBack = Math.floor(diffMs / BlockchainApiService.BLOCK_TIME_MS);
+    const blockNum = Math.max(0, latestBlock - blocksBack);
+    const outOfRange = diffMs > BlockchainApiService.MAX_HISTORY_MS;
+
+    return { blockHex: `0x${blockNum.toString(16)}`, outOfRange };
+  }
+
   private async jsonRpc<T>(method: string, params: unknown[]): Promise<T> {
     const response = await this.axiosClient.post(this.rpcUrl, {
       jsonrpc: "2.0",
@@ -396,6 +444,7 @@ export class BlockchainApiService {
     toBlock: string;
     source: string;
     total: number; // total matching events before pagination
+    warning?: string; // set when before/after date is older than ~41 days of stored history
   }> => {
     const {
       address,
@@ -405,6 +454,8 @@ export class BlockchainApiService {
       type = "erc20",
       encryptionSk,
       viewingKey,
+      before,
+      after,
     } = params;
 
     if (!validateAddress(address)) {
@@ -414,12 +465,39 @@ export class BlockchainApiService {
       );
     }
 
+    // Resolve before/after dates to block numbers.
+    // These override fromBlock/toBlock if provided.
+    let fromBlock = params.fromBlock;
+    let toBlock = params.toBlock;
+    let dateOutOfRangeWarning: string | undefined;
+
+    if (before || after) {
+      const [beforeResult, afterResult] = await Promise.all([
+        before ? this.dateToBlock(before, "end") : Promise.resolve(null),
+        after ? this.dateToBlock(after, "start") : Promise.resolve(null),
+      ]);
+      if (beforeResult) {
+        toBlock = beforeResult.blockHex;
+        if (beforeResult.outOfRange)
+          dateOutOfRangeWarning = `'before' date (${before}) is older than ~41 days — results may be incomplete`;
+      }
+      if (afterResult) {
+        fromBlock = afterResult.blockHex;
+        if (afterResult.outOfRange)
+          dateOutOfRangeWarning = `'after' date (${after}) is older than ~41 days — results may be incomplete`;
+      }
+    }
+
     const apiKey = process.env.SOCIALSCAN_API_KEY;
     const useExplorer = !!apiKey;
 
     // ── Explorer path ───────────────────────────────────────────────────────
     if (useExplorer) {
-      const explorer = new ExplorerService(apiKey!, this.chainId === SEISMIC_CHAIN_ID.testnet);
+      const explorer = new ExplorerService(
+        apiKey!,
+        this.chainId === SEISMIC_CHAIN_ID.testnet,
+        this.rpcUrl
+      );
 
       // native has no fallback - ETH transfers emit no logs, only the explorer can provide them
       if (type === "native") {
@@ -430,39 +508,8 @@ export class BlockchainApiService {
           toBlock: "latest",
           source: "socialscan-txlist",
           total: transactions.length,
+          warning: dateOutOfRangeWarning,
         };
-      }
-
-      if (type === "src20") {
-        if (!contracts?.length) {
-          throw this.errorHandler.handleApiError(
-            new Error(
-              "SRC-20 history requires at least one contract address in the `contracts` filter"
-            ),
-            "fetching SRC-20 transaction history"
-          );
-        }
-        try {
-          const allTxs = (
-            await Promise.all(
-              contracts.map((c) => explorer.getSrc20Transactions(address, c, limit, offset))
-            )
-          ).flat();
-          allTxs.sort((a, b) => (b.timestamp as number) - (a.timestamp as number));
-          const src20Page = allTxs.slice(0, limit);
-          return {
-            transactions: src20Page,
-            fromBlock: "0",
-            toBlock: "latest",
-            source: "socialscan-getlogs-src20",
-            total: allTxs.length,
-          };
-        } catch (explorerErr) {
-          this.logger.warn(
-            `SocialScan unavailable (${(explorerErr as Error).message}), falling back to eth_getLogs for SRC-20`
-          );
-          // fall through to eth_getLogs below
-        }
       }
 
       if (type === "all") {
@@ -470,8 +517,8 @@ export class BlockchainApiService {
           explorer.getNativeTransactions(address, limit, offset),
           explorer.getErc20Transactions(address, contracts?.[0], limit, offset),
         ]);
-        const merged = [...native, ...erc20].sort(
-          (a, b) => (b.timestamp as number) - (a.timestamp as number)
+        const merged = [...native, ...erc20].sort((a, b) =>
+          (b.timestamp ?? "").localeCompare(a.timestamp ?? "")
         );
         const allPage = merged.slice(0, limit);
         return {
@@ -480,34 +527,38 @@ export class BlockchainApiService {
           toBlock: "latest",
           source: "socialscan-txlist+tokentx",
           total: merged.length,
+          warning: dateOutOfRangeWarning,
         };
       }
 
       // type === "erc20": try explorer, fall back to eth_getLogs if unavailable
-      try {
-        const transactions = await explorer.getErc20Transactions(
-          address,
-          contracts?.[0],
-          limit,
-          offset
-        );
-        return {
-          transactions,
-          fromBlock: "0",
-          toBlock: "latest",
-          source: "socialscan-tokentx",
-          total: transactions.length,
-        };
-      } catch (explorerErr) {
-        this.logger.warn(
-          `SocialScan unavailable (${(explorerErr as Error).message}), falling back to eth_getLogs`
-        );
-        // fall through to eth_getLogs below
-      }
+      // src20 always skips explorer - amounts must be decrypted via eth_getLogs + viewing key
+      if (type !== "src20")
+        try {
+          const transactions = await explorer.getErc20Transactions(
+            address,
+            contracts?.[0],
+            limit,
+            offset
+          );
+          return {
+            transactions,
+            fromBlock: "0",
+            toBlock: "latest",
+            source: "socialscan-tokentx",
+            total: transactions.length,
+            warning: dateOutOfRangeWarning,
+          };
+        } catch (explorerErr) {
+          this.logger.warn(
+            `SocialScan unavailable (${(explorerErr as Error).message}), falling back to eth_getLogs`
+          );
+          // fall through to eth_getLogs below
+        }
     }
 
-    // ── Fallback: eth_getLogs ────────────────────────────────────────────────
-    // Handles erc20, src20 (SocialScan unavailable), and all (erc20 portion).
+    // ── eth_getLogs ──────────────────────────────────────────────────────────
+    // Handles erc20 (when SocialScan unavailable), src20 (always, for decryption), and all.
     // native has no RPC fallback - eth_getLogs does not capture ETH transfers.
     if (type === "native") {
       throw this.errorHandler.handleApiError(
@@ -519,59 +570,81 @@ export class BlockchainApiService {
       );
     }
 
-    // Seismic nodes cap eth_getLogs at 100,000 blocks per query and produce
-    // multiple blocks per second. Pin both fromBlock and toBlock to the same
-    // snapshot so the range can't drift over the limit between calls.
-    let fromBlock = params.fromBlock;
-    let toBlock = params.toBlock;
-    if (!fromBlock || !toBlock) {
-      const latestHex = await this.jsonRpc<string>("eth_blockNumber", []);
-      const latest = parseInt(latestHex, 16);
-      if (!toBlock) toBlock = latestHex;
-      if (!fromBlock) {
-        const from = Math.max(0, latest - 99_000); // safely under the 100k limit
-        fromBlock = `0x${from.toString(16)}`;
-      }
-    }
-
     const isSrc20 = type === "src20";
     const paddedAddress = "0x" + address.slice(2).toLowerCase().padStart(64, "0");
     const transferTopic = isSrc20 ? SRC20_TRANSFER_TOPIC : ERC20_TRANSFER_TOPIC;
+    // Only use single-window mode for explicit hex fromBlock/toBlock params (assumed to fit in 100k).
+    // before/after date ranges may span many windows — always use scanLogsUntil with bounds for those.
+    const hexRangePinned = !!(params.fromBlock && params.toBlock) && !(before || after);
+    const callerPinnedRange = hexRangePinned;
 
     // ── Viewing key path (SRC-20 received transfers) ────────────────────────
     if (isSrc20 && viewingKey) {
       const keyHash = computeKeyHash(viewingKey);
-      const baseFilter = {
-        fromBlock,
-        toBlock,
-        ...(contracts?.length ? { address: contracts } : {}),
-      };
+      const addressFilter = contracts?.length ? { address: contracts } : {};
 
-      // Fetch received events and sent events in parallel.
-      const [sentLogs, receivedLogs] = await Promise.all([
-        this.jsonRpc<EthLog[]>("eth_getLogs", [
-          { ...baseFilter, topics: [transferTopic, paddedAddress] },
-        ]),
-        this.jsonRpc<EthLog[]>("eth_getLogs", [
-          { ...baseFilter, topics: [transferTopic, null, paddedAddress, keyHash] },
-        ]),
-      ]);
+      let allLogs: EthLog[];
+      let vkFromBlock: string;
+      let vkToBlock: string;
 
-      // Deduplicate (self-transfers appear in both)
-      const seen = new Set<string>();
-      const allLogs = [...receivedLogs, ...sentLogs].filter((log) => {
-        const key = `${log.transactionHash}-${log.logIndex}`;
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      });
+      if (callerPinnedRange) {
+        vkFromBlock = fromBlock ?? params.fromBlock!;
+        vkToBlock = toBlock ?? params.toBlock!;
+        const [sentLogs, receivedLogs] = await Promise.all([
+          this.jsonRpc<EthLog[]>("eth_getLogs", [
+            {
+              ...addressFilter,
+              fromBlock: vkFromBlock,
+              toBlock: vkToBlock,
+              topics: [transferTopic, paddedAddress],
+            },
+          ]),
+          this.jsonRpc<EthLog[]>("eth_getLogs", [
+            {
+              ...addressFilter,
+              fromBlock: vkFromBlock,
+              toBlock: vkToBlock,
+              topics: [transferTopic, null, paddedAddress, keyHash],
+            },
+          ]),
+        ]);
+        const seen = new Set<string>();
+        allLogs = [...receivedLogs, ...sentLogs].filter((log) => {
+          const key = `${log.transactionHash}-${log.logIndex}`;
+          return seen.has(key) ? false : (seen.add(key), true);
+        });
+      } else {
+        const { logs, scannedFrom, scannedTo } = await this.scanLogsUntil(
+          offset + limit,
+          ({ fromBlock: fb, toBlock: tb }) => [
+            {
+              ...addressFilter,
+              fromBlock: fb,
+              toBlock: tb,
+              topics: [transferTopic, paddedAddress],
+            },
+            {
+              ...addressFilter,
+              fromBlock: fb,
+              toBlock: tb,
+              topics: [transferTopic, null, paddedAddress, keyHash],
+            },
+          ],
+          (log) => `${log.transactionHash}-${log.logIndex}`,
+          toBlock, // start from 'before' date block (or latest)
+          fromBlock // stop at 'after' date block (or 0)
+        );
+        allLogs = logs;
+        vkFromBlock = scannedFrom;
+        vkToBlock = scannedTo;
+      }
 
       allLogs.sort((a, b) => parseInt(b.blockNumber, 16) - parseInt(a.blockNumber, 16));
       const sliced = allLogs.slice(offset, offset + limit);
 
       const uniqueBlocks = [...new Set(sliced.map((l) => l.blockNumber))];
       const uniqueContracts = [...new Set(sliced.map((l) => l.address))];
-      const blockTimestamps = new Map<string, number>();
+      const blockTimestamps = new Map<string, string>();
       const tokenDecimals = new Map<string, number>();
       const tokenSymbols = new Map<string, string>();
 
@@ -581,7 +654,7 @@ export class BlockchainApiService {
             blockNum,
             false,
           ]);
-          if (block) blockTimestamps.set(blockNum, parseInt(block.timestamp, 16));
+          if (block) blockTimestamps.set(blockNum, this.toIsoTimestamp(block.timestamp));
         }),
         ...uniqueContracts.map(async (contractAddr) => {
           const info = await this.getErc20Info(contractAddr);
@@ -590,7 +663,17 @@ export class BlockchainApiService {
         }),
       ]);
 
-      const receivedSet = new Set(receivedLogs.map((l) => `${l.transactionHash}-${l.logIndex}`));
+      // EVM log topics for Transfer(address indexed from, address indexed to, bytes32 indexed encryptKeyHash, bytes encryptedAmount):
+      //   topic0 = keccak256("Transfer(...)") — event signature
+      //   topic1 = from address (32-byte padded)
+      //   topic2 = to address   (32-byte padded)
+      //   topic3 = encryptKeyHash (keccak256 of the AES viewing key used to encrypt encryptedAmount)
+      // A log is "received" when topic2 (the `to` field) matches our address.
+      const receivedSet = new Set(
+        allLogs
+          .filter((l) => l.topics[2]?.slice(-40).toLowerCase() === address.slice(2).toLowerCase())
+          .map((l) => `${l.transactionHash}-${l.logIndex}`)
+      );
 
       const transactions = await Promise.all(
         sliced.map(async (log) => {
@@ -645,36 +728,58 @@ export class BlockchainApiService {
 
       return {
         transactions,
-        fromBlock,
-        toBlock,
+        fromBlock: vkFromBlock,
+        toBlock: vkToBlock,
         source: "eth_getLogs-viewing-key",
         total: allLogs.length,
+        warning: dateOutOfRangeWarning,
       };
     }
 
-    const baseFilter = {
-      fromBlock,
-      toBlock,
-      ...(contracts?.length ? { address: contracts } : {}),
-    };
+    const addressFilter = contracts?.length ? { address: contracts } : {};
+    let allLogs: EthLog[];
 
-    const [sentLogs, receivedLogs] = await Promise.all([
-      this.jsonRpc<EthLog[]>("eth_getLogs", [
-        { ...baseFilter, topics: [transferTopic, paddedAddress, null] },
-      ]),
-      this.jsonRpc<EthLog[]>("eth_getLogs", [
-        { ...baseFilter, topics: [transferTopic, null, paddedAddress] },
-      ]),
-    ]);
-
-    // Deduplicate by transactionHash + logIndex (e.g. self-transfers)
-    const seen = new Set<string>();
-    const allLogs = [...sentLogs, ...receivedLogs].filter((log) => {
-      const key = `${log.transactionHash}-${log.logIndex}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
+    if (callerPinnedRange) {
+      fromBlock = fromBlock ?? params.fromBlock!;
+      toBlock = toBlock ?? params.toBlock!;
+      const [sentLogs, receivedLogs] = await Promise.all([
+        this.jsonRpc<EthLog[]>("eth_getLogs", [
+          { ...addressFilter, fromBlock, toBlock, topics: [transferTopic, paddedAddress, null] },
+        ]),
+        this.jsonRpc<EthLog[]>("eth_getLogs", [
+          { ...addressFilter, fromBlock, toBlock, topics: [transferTopic, null, paddedAddress] },
+        ]),
+      ]);
+      const seen = new Set<string>();
+      allLogs = [...sentLogs, ...receivedLogs].filter((log) => {
+        const key = `${log.transactionHash}-${log.logIndex}`;
+        return seen.has(key) ? false : (seen.add(key), true);
+      });
+    } else {
+      const { logs, scannedFrom, scannedTo } = await this.scanLogsUntil(
+        offset + limit,
+        ({ fromBlock: fb, toBlock: tb }) => [
+          {
+            ...addressFilter,
+            fromBlock: fb,
+            toBlock: tb,
+            topics: [transferTopic, paddedAddress, null],
+          },
+          {
+            ...addressFilter,
+            fromBlock: fb,
+            toBlock: tb,
+            topics: [transferTopic, null, paddedAddress],
+          },
+        ],
+        (log) => `${log.transactionHash}-${log.logIndex}`,
+        toBlock, // start from 'before' date block (or latest)
+        fromBlock // stop at 'after' date block (or 0)
+      );
+      allLogs = logs;
+      fromBlock = scannedFrom;
+      toBlock = scannedTo;
+    }
 
     allLogs.sort((a, b) => parseInt(b.blockNumber, 16) - parseInt(a.blockNumber, 16));
     const sliced =
@@ -684,7 +789,7 @@ export class BlockchainApiService {
     const uniqueBlocks = [...new Set(sliced.map((l) => l.blockNumber))];
     const uniqueContracts = [...new Set(sliced.map((l) => l.address))];
 
-    const blockTimestamps = new Map<string, number>();
+    const blockTimestamps = new Map<string, string>();
     const tokenDecimals = new Map<string, number>();
     const tokenSymbols = new Map<string, string>();
 
@@ -694,7 +799,7 @@ export class BlockchainApiService {
           blockNum,
           false,
         ]);
-        if (block) blockTimestamps.set(blockNum, parseInt(block.timestamp, 16));
+        if (block) blockTimestamps.set(blockNum, this.toIsoTimestamp(block.timestamp));
       }),
       ...uniqueContracts.map(async (contractAddr) => {
         const info = await this.getErc20Info(contractAddr);
@@ -738,8 +843,90 @@ export class BlockchainApiService {
       })
     );
 
-    return { transactions, fromBlock, toBlock, source: "eth_getLogs", total: allLogs.length };
+    return {
+      transactions,
+      fromBlock,
+      toBlock,
+      source: "eth_getLogs",
+      total: allLogs.length,
+      warning: dateOutOfRangeWarning,
+    };
   };
+
+  // ── eth_getLogs window scanner ────────────────────────────────────────────
+  // Seismic produces ~120ms blocks → 99k blocks ≈ 3.3 hours.
+  // We scan 99k-block windows backwards from latest, stopping when we have
+  // enough logs OR after MAX_CONSECUTIVE_EMPTY_WINDOWS consecutive empty windows.
+  private static readonly LOG_WINDOW_SIZE = 99_000;
+  private static readonly MAX_LOG_WINDOWS = 300;
+  private static readonly MAX_CONSECUTIVE_EMPTY_LOG_WINDOWS = 10;
+
+  /**
+   * Scans `eth_getLogs` backwards in 99k-block windows until `needed` unique logs
+   * are collected or 10 consecutive empty windows are seen.
+   *
+   * @param needed     - stop as soon as this many unique logs are accumulated
+   * @param buildFilters - given a { fromBlock, toBlock } hex window, return the
+   *                       array of eth_getLogs filter objects to query in parallel
+   * @param dedupeKey  - function returning a unique string key per log (for dedup)
+   */
+  private async scanLogsUntil(
+    needed: number,
+    buildFilters: (w: { fromBlock: string; toBlock: string }) => object[],
+    dedupeKey: (log: EthLog) => string,
+    /** Optional upper bound (hex). Defaults to latest block. */
+    startFromBlock?: string,
+    /** Optional lower bound (hex). Windows stop when they go below this block. */
+    stopAtBlock?: string
+  ): Promise<{ logs: EthLog[]; scannedFrom: string; scannedTo: string }> {
+    const latestHex = await this.jsonRpc<string>("eth_blockNumber", []);
+    const latest = startFromBlock
+      ? Math.min(parseInt(startFromBlock, 16), parseInt(latestHex, 16))
+      : parseInt(latestHex, 16);
+    const floor = stopAtBlock ? parseInt(stopAtBlock, 16) : 0;
+
+    const seen = new Set<string>();
+    const collected: EthLog[] = [];
+    let consecutiveEmpty = 0;
+    let scannedFrom = `0x${latest.toString(16)}`;
+    const scannedTo = `0x${latest.toString(16)}`;
+
+    for (let i = 0; i < BlockchainApiService.MAX_LOG_WINDOWS; i++) {
+      const hi = latest - i * BlockchainApiService.LOG_WINDOW_SIZE;
+      if (hi <= 0 || hi < floor) break;
+      const lo = Math.max(floor, hi - BlockchainApiService.LOG_WINDOW_SIZE + 1);
+      const window = {
+        fromBlock: `0x${lo.toString(16)}`,
+        toBlock: `0x${hi.toString(16)}`,
+      };
+      scannedFrom = window.fromBlock;
+
+      const results = await Promise.all(
+        buildFilters(window).map((f) => this.jsonRpc<EthLog[]>("eth_getLogs", [f]))
+      );
+
+      let newInWindow = 0;
+      for (const log of results.flat()) {
+        const key = dedupeKey(log);
+        if (!seen.has(key)) {
+          seen.add(key);
+          collected.push(log);
+          newInWindow++;
+        }
+      }
+
+      if (newInWindow === 0) {
+        consecutiveEmpty++;
+        if (consecutiveEmpty >= BlockchainApiService.MAX_CONSECUTIVE_EMPTY_LOG_WINDOWS) break;
+      } else {
+        consecutiveEmpty = 0;
+      }
+
+      if (collected.length >= needed) break;
+    }
+
+    return { logs: collected, scannedFrom, scannedTo };
+  }
 
   /**
    * Fetches a transaction by hash using eth_getTransactionByHash.

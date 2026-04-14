@@ -106,6 +106,8 @@ export class MainSDK {
     type?: "native" | "erc20" | "src20" | "all";
     fromBlock?: string;
     toBlock?: string;
+    before?: string;
+    after?: string;
     contracts?: string[];
     limit?: number;
     offset?: number;
@@ -137,6 +139,8 @@ export class MainSDK {
       type: params.type,
       fromBlock: params.fromBlock,
       toBlock: params.toBlock,
+      before: params.before,
+      after: params.after,
       contracts: params.contracts,
       limit: params.limit,
       offset: params.offset,

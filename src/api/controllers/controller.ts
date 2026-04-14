@@ -102,10 +102,8 @@ export class ApiController {
    */
   public getTransactionHistory = async (req: Request, res: Response) => {
     const { vaultId } = req.params;
-    const { type, fromBlock, toBlock, contracts, limit, offset } = req.query as Record<
-      string,
-      string
-    >;
+    const { type, fromBlock, toBlock, before, after, contracts, limit, offset } =
+      req.query as Record<string, string>;
     try {
       const contractList = contracts
         ? Array.isArray(contracts)
@@ -119,6 +117,8 @@ export class ApiController {
         type: (type as "native" | "erc20" | "src20" | "all") ?? "erc20",
         fromBlock,
         toBlock,
+        before,
+        after,
         contracts: contractList,
         limit: parsedLimit,
         offset: parsedOffset,
@@ -135,6 +135,7 @@ export class ApiController {
           limit: parsedLimit,
           offset: parsedOffset,
           hasMore: parsedOffset + result.transactions.length < result.total,
+          ...(result.warning && { warning: result.warning }),
         },
       });
     } catch (error) {

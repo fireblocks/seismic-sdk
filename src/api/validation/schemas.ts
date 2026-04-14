@@ -93,6 +93,26 @@ export const transactionHistoryQuery = z.object({
         message: "endDate must be a valid ISO 8601 date string",
       }
     ),
+  /** Return transactions before this date (YYYY-MM-DD). Converts to an approximate toBlock. */
+  before: z
+    .string()
+    .optional()
+    .refine((val) => !val || /^\d{4}-\d{2}-\d{2}$/.test(val), {
+      message: "before must be a valid date in YYYY-MM-DD format",
+    })
+    .refine((val) => !val || !isNaN(new Date(val).getTime()), {
+      message: "before must be a valid date",
+    }),
+  /** Return transactions after this date (YYYY-MM-DD). Converts to an approximate fromBlock. */
+  after: z
+    .string()
+    .optional()
+    .refine((val) => !val || /^\d{4}-\d{2}-\d{2}$/.test(val), {
+      message: "after must be a valid date in YYYY-MM-DD format",
+    })
+    .refine((val) => !val || !isNaN(new Date(val).getTime()), {
+      message: "after must be a valid date",
+    }),
 });
 
 // ============================================================================
@@ -114,6 +134,43 @@ export const submitTransactionBody = z.object({
 // ============================================================================
 // SEISMIC-SPECIFIC SCHEMAS
 // ============================================================================
+
+const dateParam = (name: string) =>
+  z
+    .string()
+    .optional()
+    .refine((val) => !val || /^\d{4}-\d{2}-\d{2}$/.test(val), {
+      message: `${name} must be a valid date in YYYY-MM-DD format`,
+    })
+    .refine((val) => !val || !isNaN(new Date(val).getTime()), {
+      message: `${name} must be a valid date`,
+    });
+
+/**
+ * Validates query params for GET /api/:vaultId/transactions
+ */
+export const transactionsQuery = z.object({
+  type: z.enum(["native", "erc20", "src20", "all"]).optional(),
+  contracts: z.string().optional(),
+  limit: z
+    .string()
+    .optional()
+    .transform((val) => (val ? parseInt(val, 10) : undefined))
+    .refine((val) => val === undefined || (!isNaN(val) && val > 0), {
+      message: "limit must be a positive number",
+    }),
+  offset: z
+    .string()
+    .optional()
+    .transform((val) => (val ? parseInt(val, 10) : undefined))
+    .refine((val) => val === undefined || (!isNaN(val) && val >= 0), {
+      message: "offset must be a non-negative number",
+    }),
+  fromBlock: z.string().optional(),
+  toBlock: z.string().optional(),
+  before: dateParam("before"),
+  after: dateParam("after"),
+});
 
 /**
  * Validates `:txHash` route param - must be 0x-prefixed 32-byte hex (66 chars total)

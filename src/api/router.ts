@@ -1,7 +1,13 @@
 import { Router } from "express";
 import { MainSDK } from "../MainSDK.js";
 import { ApiController } from "./controllers/controller.js";
-import { validate, contractsQuery, transferBody, txHashParam } from "./validation/index.js";
+import {
+  validate,
+  contractsQuery,
+  transferBody,
+  txHashParam,
+  transactionsQuery,
+} from "./validation/index.js";
 import { z } from "zod";
 import { register } from "prom-client";
 
@@ -330,7 +336,7 @@ export const configureRouter = (sdk: MainSDK): Router => {
    */
   router.get(
     "/:vaultId/transactions",
-    validate({ params: vaultIdParam }),
+    validate({ params: vaultIdParam, query: transactionsQuery }),
     controller.getTransactionHistory
   );
 

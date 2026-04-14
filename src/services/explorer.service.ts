@@ -11,8 +11,11 @@ import {
 
 type ExplorerTx = {
   hash: string;
-  from: string;
-  to: string;
+  // txlist uses fromAddress/toAddress; tokentx uses from/to
+  from?: string;
+  to?: string;
+  fromAddress?: string;
+  toAddress?: string;
   value: string; // wei as decimal string
   timeStamp: string; // unix timestamp as decimal string
   isError?: string; // "0" = success, "1" = failed (txlist only)
@@ -65,17 +68,92 @@ export type Src20Transaction = Transaction & {
 export class ExplorerService {
   private readonly apiKey: string;
   private readonly baseUrl: string;
+  private readonly rpcUrl: string;
   private readonly logger = new Logger("services:explorer");
 
-  constructor(apiKey: string, testnet = true) {
+  constructor(apiKey: string, testnet = true, rpcUrl: string) {
     this.apiKey = apiKey;
     this.baseUrl = testnet ? SOCIALSCAN_API_URL.testnet : SOCIALSCAN_API_URL.mainnet;
+    this.rpcUrl = rpcUrl;
     if (!this.baseUrl) {
       throw new Error("ExplorerService: mainnet SocialScan URL is not yet available");
     }
   }
 
   // ─── Internal helpers ────────────────────────────────────────────────────
+
+  // Seismic testnet: ~120ms block time → ~720k blocks/day.
+  // SocialScan caps each query at 100k blocks (~3.3 hours of history).
+  // We scan windows backwards from latest, stopping as soon as we have enough results
+  // OR after MAX_CONSECUTIVE_EMPTY consecutive empty windows (address has no more history).
+  private static readonly WINDOW_SIZE = 99_000;
+  private static readonly MAX_WINDOWS = 300; // hard cap: ~41 days back
+  private static readonly MAX_CONSECUTIVE_EMPTY = 10; // stop after 10 dry windows (~33h gap)
+
+  /**
+   * Fetches the latest block number from the Seismic RPC.
+   * SocialScan has no proxy module, so we go directly to the node.
+   */
+  private async getLatestBlock(): Promise<number> {
+    const response = await axiosInstance.post<{ result: string }>(this.rpcUrl, {
+      jsonrpc: "2.0",
+      method: "eth_blockNumber",
+      params: [],
+      id: 1,
+    });
+    return parseInt(response.data.result, 16);
+  }
+
+  /**
+   * Scans 99k-block windows backwards from latest, accumulating results until
+   * `needed` items are collected or MAX_WINDOWS is exhausted.
+   *
+   * Each window issues the queries returned by buildParams in parallel.
+   * Windows are processed sequentially (newest first) so we stop early as soon
+   * as we have enough - typically 1-3 windows for the first page.
+   */
+  private async scanWindowsUntil<T>(
+    needed: number,
+    buildParams: (w: { startblock: string; endblock: string }) => Record<string, string>[],
+    dedupeKey: (item: T) => string,
+    countFilter?: (item: T) => boolean
+  ): Promise<T[]> {
+    const latest = await this.getLatestBlock();
+    const seen = new Set<string>();
+    const collected: T[] = [];
+    let consecutiveEmpty = 0;
+
+    for (let i = 0; i < ExplorerService.MAX_WINDOWS; i++) {
+      const hi = latest - i * ExplorerService.WINDOW_SIZE;
+      if (hi <= 0) break;
+      const lo = Math.max(0, hi - ExplorerService.WINDOW_SIZE + 1);
+
+      const window = { startblock: String(lo), endblock: String(hi) };
+      const results = await Promise.all(buildParams(window).map((p) => this.get<T>(p)));
+
+      let newInWindow = 0;
+      for (const item of results.flat()) {
+        const key = dedupeKey(item);
+        if (!seen.has(key)) {
+          seen.add(key);
+          collected.push(item);
+          if (!countFilter || countFilter(item)) newInWindow++;
+        }
+      }
+
+      if (newInWindow === 0) {
+        consecutiveEmpty++;
+        if (consecutiveEmpty >= ExplorerService.MAX_CONSECUTIVE_EMPTY) break;
+      } else {
+        consecutiveEmpty = 0;
+      }
+
+      const countedSoFar = countFilter ? collected.filter(countFilter).length : collected.length;
+      if (countedSoFar >= needed) break;
+    }
+
+    return collected.filter((item) => !countFilter || countFilter(item));
+  }
 
   private async get<T>(params: Record<string, string>): Promise<T[]> {
     const url = new URL(this.baseUrl);
@@ -88,7 +166,10 @@ export class ExplorerService {
     // status "0" with "No transactions found" is a valid empty response
     if (status === "0") {
       if (message === "No transactions found" || message === "No records found") return [];
-      throw new Error(`Explorer API error: ${message}`);
+      const detail = Array.isArray((result as unknown as { errors?: { msg: string }[] })?.errors)
+        ? (result as unknown as { errors: { msg: string }[] }).errors.map((e) => e.msg).join("; ")
+        : message;
+      throw new Error(`Explorer API error: ${detail}`);
     }
 
     return Array.isArray(result) ? result : [];
@@ -111,40 +192,49 @@ export class ExplorerService {
   ): Promise<Transaction[]> => {
     this.logger.debug(`Fetching native tx history | address:${address}`);
 
-    const pageSize = String(limit + offset); // fetch enough to satisfy offset
-    const params = {
-      module: "account",
-      address,
-      startblock: "0",
-      endblock: "99999999",
-      page: "1",
-      offset: pageSize,
-      sort: "desc",
-    };
-
-    const [normal, internal] = await Promise.all([
-      this.get<ExplorerTx>({ ...params, action: "txlist" }),
-      this.get<ExplorerTx>({ ...params, action: "txlistinternal" }),
-    ]);
-
-    // Deduplicate by hash (internal txs from the same tx appear twice)
-    const seen = new Set<string>();
-    const all = [...normal, ...internal].filter((tx) => {
-      if (seen.has(tx.hash)) return false;
-      seen.add(tx.hash);
-      return true;
-    });
+    const all = await this.scanWindowsUntil<ExplorerTx>(
+      offset + limit,
+      ({ startblock, endblock }) => [
+        {
+          module: "account",
+          action: "txlist",
+          address,
+          startblock,
+          endblock,
+          page: "1",
+          offset: "100",
+          sort: "desc",
+        },
+        {
+          module: "account",
+          action: "txlistinternal",
+          address,
+          startblock,
+          endblock,
+          page: "1",
+          offset: "100",
+          sort: "desc",
+        },
+      ],
+      (tx) => tx.hash,
+      // Only count transactions where ETH actually moved (value > 0).
+      // txlist returns all txs including shielded contract calls with value=0.
+      (tx) => BigInt(tx.value) > 0n
+    );
 
     all.sort((a, b) => parseInt(b.timeStamp) - parseInt(a.timeStamp));
     const sliced = all.slice(offset, offset + limit);
 
     return sliced.map((tx) => ({
       type: TransactionType.Native,
-      sender: tx.from,
-      recipient: tx.to,
+      sender: tx.fromAddress ?? tx.from ?? "",
+      recipient: tx.toAddress ?? tx.to ?? "",
       amount: Number(BigInt(tx.value)) / 1e18,
       transaction_hash: tx.hash,
-      timestamp: parseInt(tx.timeStamp),
+      timestamp: new Date(parseInt(tx.timeStamp) * 1000)
+        .toISOString()
+        .replace("T", " ")
+        .replace(/\.\d{3}Z$/, " UTC"),
       success: tx.isError === "0" || tx.isError === undefined,
     }));
   };
@@ -166,20 +256,27 @@ export class ExplorerService {
   ): Promise<Transaction[]> => {
     this.logger.debug(`Fetching ERC-20 tx history | address:${address}`);
 
-    const params: Record<string, string> = {
-      module: "account",
-      action: "tokentx",
-      address,
-      startblock: "0",
-      endblock: "99999999",
-      page: "1",
-      offset: String(limit + offset),
-      sort: "desc",
-    };
-    if (contractAddress) params.contractaddress = contractAddress;
+    const all = await this.scanWindowsUntil<ExplorerTx>(
+      offset + limit,
+      ({ startblock, endblock }) => {
+        const p: Record<string, string> = {
+          module: "account",
+          action: "tokentx",
+          address,
+          startblock,
+          endblock,
+          page: "1",
+          offset: "100",
+          sort: "desc",
+        };
+        if (contractAddress) p.contractaddress = contractAddress;
+        return [p];
+      },
+      (tx) => tx.hash
+    );
 
-    const txs = await this.get<ExplorerTx>(params);
-    const sliced = txs.slice(offset, offset + limit);
+    all.sort((a, b) => parseInt(b.timeStamp) - parseInt(a.timeStamp));
+    const sliced = all.slice(offset, offset + limit);
 
     return sliced.map((tx) => {
       const decimals = tx.tokenDecimal ? parseInt(tx.tokenDecimal) : DEFAULT_TOKEN_DECIMALS;
@@ -190,11 +287,14 @@ export class ExplorerService {
           tokenName: tx.tokenSymbol ?? tx.tokenName ?? tx.contractAddress ?? "",
           decimals,
         },
-        sender: tx.from,
-        recipient: tx.to,
+        sender: tx.fromAddress ?? tx.from ?? "",
+        recipient: tx.toAddress ?? tx.to ?? "",
         amount: Number(BigInt(tx.value)) / 10 ** decimals,
         transaction_hash: tx.hash,
-        timestamp: parseInt(tx.timeStamp),
+        timestamp: new Date(parseInt(tx.timeStamp) * 1000)
+          .toISOString()
+          .replace("T", " ")
+          .replace(/\.\d{3}Z$/, " UTC"),
         success: tx.isError !== "1",
       };
     });
@@ -228,43 +328,37 @@ export class ExplorerService {
     );
 
     const paddedAddress = "0x" + address.slice(2).toLowerCase().padStart(64, "0");
-    const pageSize = String(limit + offset);
 
-    // Query sent and received in parallel
-    const [sentLogs, receivedLogs] = await Promise.all([
-      this.get<ExplorerLog>({
-        module: "logs",
-        action: "getLogs",
-        address: contractAddress,
-        topic0: SRC20_TRANSFER_TOPIC,
-        topic0_1_opr: "and",
-        topic1: paddedAddress,
-        fromBlock: "0",
-        toBlock: "99999999",
-        page: "1",
-        offset: pageSize,
-      }),
-      this.get<ExplorerLog>({
-        module: "logs",
-        action: "getLogs",
-        address: contractAddress,
-        topic0: SRC20_TRANSFER_TOPIC,
-        topic0_2_opr: "and",
-        topic2: paddedAddress,
-        fromBlock: "0",
-        toBlock: "99999999",
-        page: "1",
-        offset: pageSize,
-      }),
-    ]);
-
-    // Deduplicate by txHash (self-transfers appear in both)
-    const seen = new Set<string>();
-    const allLogs = [...sentLogs, ...receivedLogs].filter((log) => {
-      if (seen.has(log.transactionHash)) return false;
-      seen.add(log.transactionHash);
-      return true;
-    });
+    const allLogs = await this.scanWindowsUntil<ExplorerLog>(
+      offset + limit,
+      ({ startblock, endblock }) => [
+        {
+          module: "logs",
+          action: "getLogs",
+          address: contractAddress,
+          topic0: SRC20_TRANSFER_TOPIC,
+          topic0_1_opr: "and",
+          topic1: paddedAddress,
+          fromBlock: startblock,
+          toBlock: endblock,
+          page: "1",
+          offset: "100",
+        } as Record<string, string>,
+        {
+          module: "logs",
+          action: "getLogs",
+          address: contractAddress,
+          topic0: SRC20_TRANSFER_TOPIC,
+          topic0_2_opr: "and",
+          topic2: paddedAddress,
+          fromBlock: startblock,
+          toBlock: endblock,
+          page: "1",
+          offset: "100",
+        } as Record<string, string>,
+      ],
+      (log) => log.transactionHash
+    );
 
     allLogs.sort((a, b) => parseInt(b.timeStamp, 16) - parseInt(a.timeStamp, 16));
     const sliced = allLogs.slice(offset, offset + limit);
@@ -278,7 +372,10 @@ export class ExplorerService {
       amount: 0,
       encryptedAmount: log.data,
       transaction_hash: log.transactionHash,
-      timestamp: parseInt(log.timeStamp, 16),
+      timestamp: new Date(parseInt(log.timeStamp, 16) * 1000)
+        .toISOString()
+        .replace("T", " ")
+        .replace(/\.\d{3}Z$/, " UTC"),
       success: true,
     }));
   };
