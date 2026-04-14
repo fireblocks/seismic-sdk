@@ -3,6 +3,7 @@ import { MainSDK } from "../MainSDK.js";
 import { ApiController } from "./controllers/controller.js";
 import { validate, contractsQuery, transferBody, txHashParam } from "./validation/index.js";
 import { z } from "zod";
+import { register } from "prom-client";
 
 /** Validates `:vaultId` path param - numeric string */
 const vaultIdParam = z.object({
@@ -465,6 +466,25 @@ export const configureRouter = (sdk: MainSDK): Router => {
     validate({ params: vaultIdParam, body: transferBody }),
     controller.transfer
   );
+
+  /**
+   * @openapi
+   * /api/metrics:
+   *   get:
+   *     tags: [Metrics]
+   *     summary: Prometheus metrics
+   *     responses:
+   *       200:
+   *         description: Prometheus text format metrics
+   *         content:
+   *           text/plain:
+   *             schema:
+   *               type: string
+   */
+  router.get("/metrics", async (_req, res) => {
+    res.set("Content-Type", register.contentType);
+    res.end(await register.metrics());
+  });
 
   return router;
 };
