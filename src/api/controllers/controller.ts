@@ -56,43 +56,33 @@ export class ApiController {
   };
 
   /**
-   * GET /api/:vaultId/erc20-balances?contracts=0x...
-   * Returns plaintext ERC-20 balances for a list of contracts.
+   * GET /api/:vaultId/token-balances?type=erc20|src20|all&contracts=0x...
+   * Returns ERC-20 and/or SRC-20 token balances. Contracts are optional — omitting
+   * them triggers auto-discovery. When type=all, each type fails independently:
+   * the response is always 200 with whatever succeeded, plus error fields for what failed.
    */
-  public getErc20Balances = async (req: Request, res: Response) => {
+  public getTokenBalances = async (req: Request, res: Response) => {
     const { vaultId } = req.params;
-    const raw = req.query.contracts;
-    const contracts = Array.isArray(raw)
-      ? (raw as string[])
-      : (raw as string).split(",").map((s) => s.trim());
+    const { type, contracts: rawContracts } = req.query as {
+      type?: string;
+      contracts?: string | string[];
+    };
+    const contracts = rawContracts
+      ? Array.isArray(rawContracts)
+        ? rawContracts
+        : rawContracts.split(",").map((s) => s.trim())
+      : undefined;
     try {
-      const balances = await this.sdk.getErc20Balances(vaultId, contracts);
-      res.status(200).json({ success: true, data: balances });
-    } catch (error) {
-      this.handleError(error, res, "getErc20Balances");
-    }
-  };
-
-  /**
-   * GET /api/:vaultId/src20-balances?contracts=0x...
-   * Returns SRC-20 shielded balances using Fireblocks-signed reads.
-   */
-  public getSrc20Balances = async (req: Request, res: Response) => {
-    const { vaultId } = req.params;
-    const raw = req.query.contracts;
-    const contracts = Array.isArray(raw)
-      ? (raw as string[])
-      : (raw as string).split(",").map((s) => s.trim());
-    try {
-      const balances = await Promise.all(
-        contracts.map(async (contractAddress) => {
-          const result = await this.sdk.getSrc20Balance(vaultId, contractAddress);
-          return { contractAddress, ...result };
-        })
+      const data = await this.sdk.getTokenBalances(
+        vaultId,
+        (type as "erc20" | "src20" | "all") ?? "all",
+        contracts
       );
-      res.status(200).json({ success: true, data: balances });
+      // Partial failures in type=all are already encoded in data.erc20Error / data.src20Error.
+      // We return 200 so callers can use whatever did succeed.
+      res.status(200).json({ success: true, data });
     } catch (error) {
-      this.handleError(error, res, "getSrc20Balances");
+      this.handleError(error, res, "getTokenBalances");
     }
   };
 

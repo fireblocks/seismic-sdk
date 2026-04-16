@@ -3,10 +3,10 @@ import { MainSDK } from "../MainSDK.js";
 import { ApiController } from "./controllers/controller.js";
 import {
   validate,
-  contractsQuery,
   transferBody,
   txHashParam,
   transactionsQuery,
+  tokenBalancesQuery,
 } from "./validation/index.js";
 import { z } from "zod";
 import { register } from "prom-client";
@@ -155,18 +155,19 @@ export const configureRouter = (sdk: MainSDK): Router => {
    *       400:
    *         description: Invalid parameters
    */
-  router.get(
-    "/:vaultId/erc20-balances",
-    validate({ params: vaultIdParam, query: contractsQuery }),
-    controller.getErc20Balances
-  );
-
   /**
    * @openapi
-   * /api/{vaultId}/src20-balances:
+   * /api/{vaultId}/token-balances:
    *   get:
    *     tags: [Balance]
-   *     summary: Get SRC-20 shielded balances using Fireblocks-signed reads
+   *     summary: Get ERC-20 and/or SRC-20 token balances
+   *     description: |
+   *       Returns token balances grouped by type. Contracts are optional — omitting
+   *       them triggers auto-discovery (ERC-20 via SocialScan, SRC-20 via eth_getLogs).
+   *
+   *       When `type=all` (default), both types are fetched in parallel. If one fails
+   *       (e.g. SOCIALSCAN_API_KEY missing for ERC-20), the response is still 200 with
+   *       the successful type included and an error field for the failed type.
    *     parameters:
    *       - in: path
    *         name: vaultId
@@ -174,24 +175,31 @@ export const configureRouter = (sdk: MainSDK): Router => {
    *         schema:
    *           type: string
    *       - in: query
+   *         name: type
+   *         schema:
+   *           type: string
+   *           enum: [erc20, src20, all]
+   *           default: all
+   *       - in: query
    *         name: contracts
-   *         required: true
+   *         required: false
    *         style: form
    *         explode: true
    *         schema:
    *           type: array
    *           items:
    *             type: string
+   *         description: Optional contract filter. If omitted, contracts are auto-discovered.
    *     responses:
    *       200:
-   *         description: SRC-20 shielded balances
+   *         description: Token balances grouped by type
    *       400:
    *         description: Invalid parameters
    */
   router.get(
-    "/:vaultId/src20-balances",
-    validate({ params: vaultIdParam, query: contractsQuery }),
-    controller.getSrc20Balances
+    "/:vaultId/token-balances",
+    validate({ params: vaultIdParam, query: tokenBalancesQuery }),
+    controller.getTokenBalances
   );
 
   /**

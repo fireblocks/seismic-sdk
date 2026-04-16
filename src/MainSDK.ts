@@ -565,6 +565,98 @@ export class MainSDK {
     return results;
   };
 
+  /**
+   * Returns token balances for a vault.
+   *
+   * - type="erc20": auto-discovers via SocialScan (requires SOCIALSCAN_API_KEY) or
+   *                 reads specific contracts if provided. Returns plaintext balances.
+   * - type="src20": auto-discovers via eth_getLogs scan or reads specific contracts.
+   *                 Returns decrypted shielded balances via balanceOfSigned.
+   * - type="all": both in parallel, each failing independently.
+   *
+   * If contracts are provided they override auto-discovery for that type.
+   */
+  public getTokenBalances = async (
+    vaultId: string,
+    type: "erc20" | "src20" | "all" = "all",
+    contracts?: string[]
+  ) => {
+    const { address } = await this.ensureVaultData(vaultId);
+
+    const fetchErc20 = async () => {
+      if (contracts?.length) {
+        // Known contracts: call eth_call directly (no SOCIALSCAN_API_KEY needed)
+        return Promise.all(
+          contracts.map(async (contractAddress) => {
+            try {
+              const [raw, info] = await Promise.all([
+                this.blockchainApiService.readErc20Balance(address, contractAddress),
+                this.blockchainApiService.getErc20Info(contractAddress),
+              ]);
+              const decimals = info.decimals ?? 18;
+              return {
+                contractAddress,
+                name: info.name ?? contractAddress,
+                symbol: info.symbol ?? contractAddress,
+                decimals,
+                balance: Number(raw) / 10 ** decimals,
+                rawBalance: raw.toString(),
+              };
+            } catch {
+              return {
+                contractAddress,
+                name: "",
+                symbol: "",
+                decimals: 18,
+                balance: 0,
+                rawBalance: "0",
+              };
+            }
+          })
+        );
+      }
+      // No contracts: discover via SocialScan
+      return this.blockchainApiService.getAllTokenBalances(address);
+    };
+
+    const fetchSrc20 = async () => {
+      const contractList = contracts?.length
+        ? contracts
+        : await this.blockchainApiService.discoverSrc20Contracts(address);
+      if (contractList.length === 0) return [];
+      return Promise.all(
+        contractList.map(async (contractAddress) => {
+          const result = await this.getSrc20Balance(vaultId, contractAddress);
+          const info = (await this.blockchainApiService
+            .getErc20Info(contractAddress)
+            .catch(() => ({}))) as { name?: string; symbol?: string; decimals?: number };
+          return {
+            contractAddress,
+            name: info.name,
+            symbol: info.symbol,
+            decimals: info.decimals,
+            ...result,
+          };
+        })
+      );
+    };
+
+    if (type === "erc20") {
+      return { erc20: await fetchErc20() };
+    }
+    if (type === "src20") {
+      return { src20: await fetchSrc20() };
+    }
+    // type === "all": run in parallel, each fails independently
+    const [erc20, src20] = await Promise.allSettled([fetchErc20(), fetchSrc20()]);
+    return {
+      erc20: erc20.status === "fulfilled" ? erc20.value : [],
+      src20: src20.status === "fulfilled" ? src20.value : [],
+      ...(erc20.status === "rejected" ? { erc20Error: (erc20.reason as Error).message } : {}),
+      ...(src20.status === "rejected" ? { src20Error: (src20.reason as Error).message } : {}),
+    };
+  };
+
   // ─── Seismic shielded operations ────────────────────────────────────────────
 
   /**

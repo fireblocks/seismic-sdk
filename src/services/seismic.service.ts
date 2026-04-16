@@ -273,6 +273,22 @@ export class BlockchainApiService {
   };
 
   /**
+   * Returns all ERC-20 token balances for an address via SocialScan `addresstokenbalance`.
+   * No contract list needed — the explorer aggregates all Transfer event history.
+   * Requires SOCIALSCAN_API_KEY.
+   */
+  public getAllTokenBalances = async (address: string) => {
+    const apiKey = process.env.SOCIALSCAN_API_KEY;
+    if (!apiKey) throw new Error("SOCIALSCAN_API_KEY is required for getAllTokenBalances");
+    const explorer = new ExplorerService(
+      apiKey,
+      this.chainId === SEISMIC_CHAIN_ID.testnet,
+      this.rpcUrl
+    );
+    return explorer.getTokenBalances(address);
+  };
+
+  /**
    * Returns fungible token balances for a Seismic address.
    *
    * SRC-20 balances are encrypted on-chain and require a Fireblocks-signed read
@@ -851,6 +867,67 @@ export class BlockchainApiService {
       total: allLogs.length,
       warning: dateOutOfRangeWarning,
     };
+  };
+
+  // Discovery scans all windows in parallel batches — no consecutive-empty bail-out
+  // because gaps in activity shouldn't stop us finding older contracts.
+  // 50 windows × 99k blocks × 120ms ≈ 7 days of history; covers most use cases.
+  private static readonly DISCOVERY_WINDOWS = 50;
+  private static readonly DISCOVERY_BATCH_SIZE = 10; // parallel RPC calls per batch
+
+  /**
+   * Discovers all SRC-20 contracts that have ever sent to or received from an address.
+   * Scans eth_getLogs for SRC-20 Transfer events (topic1=from or topic2=to).
+   * Returns unique contract addresses from log.address.
+   * No SOCIALSCAN_API_KEY needed — pure RPC.
+   *
+   * Scans DISCOVERY_WINDOWS (50) backwards in parallel batches of DISCOVERY_BATCH_SIZE.
+   * Does NOT bail out on consecutive empty windows — gaps in activity are expected.
+   */
+  public discoverSrc20Contracts = async (address: string): Promise<string[]> => {
+    const paddedAddress = "0x" + address.slice(2).toLowerCase().padStart(64, "0");
+    const latestHex = await this.jsonRpc<string>("eth_blockNumber", []);
+    const latest = parseInt(latestHex, 16);
+    const contracts = new Set<string>();
+    const seen = new Set<string>();
+
+    // Build all window indices, then process in parallel batches
+    const windowCount = Math.min(
+      BlockchainApiService.DISCOVERY_WINDOWS,
+      Math.ceil(latest / BlockchainApiService.LOG_WINDOW_SIZE)
+    );
+    const indices = Array.from({ length: windowCount }, (_, i) => i);
+
+    for (let b = 0; b < indices.length; b += BlockchainApiService.DISCOVERY_BATCH_SIZE) {
+      const batch = indices.slice(b, b + BlockchainApiService.DISCOVERY_BATCH_SIZE);
+      const batchLogs = await Promise.all(
+        batch.map(async (i) => {
+          const hi = latest - i * BlockchainApiService.LOG_WINDOW_SIZE;
+          if (hi <= 0) return [];
+          const lo = Math.max(0, hi - BlockchainApiService.LOG_WINDOW_SIZE + 1);
+          const window = { fromBlock: `0x${lo.toString(16)}`, toBlock: `0x${hi.toString(16)}` };
+          const [sent, received] = await Promise.all([
+            this.jsonRpc<EthLog[]>("eth_getLogs", [
+              { ...window, topics: [SRC20_TRANSFER_TOPIC, paddedAddress, null] },
+            ]),
+            this.jsonRpc<EthLog[]>("eth_getLogs", [
+              { ...window, topics: [SRC20_TRANSFER_TOPIC, null, paddedAddress] },
+            ]),
+          ]);
+          return [...sent, ...received];
+        })
+      );
+
+      for (const log of batchLogs.flat()) {
+        const key = `${log.transactionHash}-${log.logIndex}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          contracts.add(log.address.toLowerCase());
+        }
+      }
+    }
+
+    return [...contracts];
   };
 
   // ── eth_getLogs window scanner ────────────────────────────────────────────

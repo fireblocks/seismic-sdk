@@ -56,11 +56,48 @@ All routes are mounted at `/api`. Full interactive docs at `GET /api-docs` (Swag
 
 ### Balances
 
-| Method | Route                                          | Description                                       |
-| ------ | ---------------------------------------------- | ------------------------------------------------- |
-| `GET`  | `/api/:vaultId/balance`                        | Native ETH balance                                |
-| `GET`  | `/api/:vaultId/erc20-balances?contracts=0x...` | ERC-20 balances (comma-separated contracts)       |
-| `GET`  | `/api/:vaultId/src20-balances?contracts=0x...` | SRC-20 shielded balances (Fireblocks-signed read) |
+| Method | Route                          | Description                                      |
+| ------ | ------------------------------ | ------------------------------------------------ |
+| `GET`  | `/api/:vaultId/balance`        | Native ETH balance                               |
+| `GET`  | `/api/:vaultId/token-balances` | ERC-20 and/or SRC-20 balances (see params below) |
+
+**Query parameters for `/token-balances`:**
+
+| Param       | Default | Description                                                                                                                    |
+| ----------- | ------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `type`      | `all`   | `erc20` \| `src20` \| `all`                                                                                                    |
+| `contracts` |         | Optional comma-separated contract addresses. If omitted, auto-discovers: ERC-20 via SocialScan, SRC-20 via `eth_getLogs` scan. |
+
+**Response shape:**
+
+```json
+{
+  "success": true,
+  "data": {
+    "erc20": [
+      {
+        "contractAddress": "0x...",
+        "name": "USDC",
+        "symbol": "USDC",
+        "decimals": 6,
+        "balance": 100,
+        "rawBalance": "100000000"
+      }
+    ],
+    "src20": [
+      {
+        "contractAddress": "0x...",
+        "name": "TSRC",
+        "symbol": "TSRC",
+        "decimals": 18,
+        "balance": 9139
+      }
+    ]
+  }
+}
+```
+
+When `type=all`, each type is fetched in parallel and fails independently. If one fails, the response is still `200` with the successful data plus an error field (`erc20Error` or `src20Error`) for the failed type.
 
 ### SRC-20 Viewing Key
 

@@ -25,6 +25,16 @@ type ExplorerTx = {
   contractAddress?: string;
 };
 
+type ExplorerTokenBalance = {
+  TokenAddress: string;
+  TokenName: string;
+  TokenType: string;
+  TokenSymbol: string;
+  TokenQuantity: string; // raw amount (no decimal applied)
+  TokenDecimals: string;
+  TokenID: string | null;
+};
+
 type ExplorerLog = {
   transactionHash: string;
   address: string; // emitting contract
@@ -378,5 +388,48 @@ export class ExplorerService {
         .replace(/\.\d{3}Z$/, " UTC"),
       success: true,
     }));
+  };
+
+  /**
+   * Returns all ERC-20 token balances held by an address — no contract list needed.
+   * Uses SocialScan `addresstokenbalance` which aggregates all Transfer events for the address.
+   *
+   * @param address - Vault's Seismic/ETH address
+   */
+  public getTokenBalances = async (
+    address: string
+  ): Promise<
+    {
+      contractAddress: string;
+      name: string;
+      symbol: string;
+      decimals: number;
+      balance: number;
+      rawBalance: string;
+    }[]
+  > => {
+    this.logger.debug(`Fetching all token balances | address:${address}`);
+
+    const params: Record<string, string> = {
+      module: "account",
+      action: "addresstokenbalance",
+      address,
+    };
+
+    const results = await this.get<ExplorerTokenBalance>(params);
+
+    return results
+      .filter((t) => t.TokenType === "ERC20")
+      .map((t) => {
+        const decimals = parseInt(t.TokenDecimals) || DEFAULT_TOKEN_DECIMALS;
+        return {
+          contractAddress: t.TokenAddress,
+          name: t.TokenName,
+          symbol: t.TokenSymbol,
+          decimals,
+          balance: Number(BigInt(t.TokenQuantity)) / 10 ** decimals,
+          rawBalance: t.TokenQuantity,
+        };
+      });
   };
 }

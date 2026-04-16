@@ -197,6 +197,22 @@ export const contractsQuery = z.object({
 });
 
 /**
+ * Validates query params for GET /api/:vaultId/token-balances
+ */
+export const tokenBalancesQuery = z.object({
+  type: z.enum(["erc20", "src20", "all"]).optional().default("all"),
+  contracts: z
+    .union([z.string(), z.array(z.string())])
+    .transform((val) =>
+      (Array.isArray(val) ? val : val.split(",")).map((s) => s.trim()).filter(Boolean)
+    )
+    .refine((addrs) => addrs.every((a) => /^0x[0-9a-fA-F]{40}$/.test(a)), {
+      message: "each contract must be a valid 0x-prefixed EVM address",
+    })
+    .optional(),
+});
+
+/**
  * Validates POST /api/:vaultId/transfer body.
  * Destination is either a `recipient` address or a `destinationVaultId` (not both).
  * `contractAddress` is required for ERC20 and SRC20 types.
