@@ -58,7 +58,7 @@ All routes are mounted at `/api`. Full interactive docs at `GET /api-docs` (Swag
 
 | Method | Route                          | Description                                      |
 | ------ | ------------------------------ | ------------------------------------------------ |
-| `GET`  | `/api/:vaultId/balance`        | Native ETH balance                               |
+| `GET`  | `/api/:vaultId/native-balance` | Native ETH balance                               |
 | `GET`  | `/api/:vaultId/token-balances` | ERC-20 and/or SRC-20 balances (see params below) |
 
 **Query parameters for `/token-balances`:**
@@ -200,7 +200,7 @@ const sdk = new MainSDK({
 
 // Vault identity (lazy - runs on first use)
 const address = await sdk.getSeismicAddress("0");
-const balance = await sdk.getBalance("0");
+const balance = await sdk.getNativeBalance("0");
 
 // SRC-20 shielded balance - Fireblocks signs the read authorization
 const src20 = await sdk.getSrc20Balance("0", "0xContractAddress");

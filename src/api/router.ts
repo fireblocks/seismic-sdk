@@ -19,15 +19,17 @@ const vaultIdParam = z.object({
 /**
  * Configures all API routes for the Seismic + Fireblocks SDK.
  *
- * HLD routes (all under /api):
+ * Routes (all under /api):
  *   GET  /api/:vaultId/address
  *   GET  /api/:vaultId/public-key
- *   GET  /api/:vaultId/balance
- *   GET  /api/:vaultId/erc20-balances?contracts=0x...
- *   GET  /api/:vaultId/src20-balances?contracts=0x...
- *   GET  /api/:vaultId/transactions?limit=N&offset=N
+ *   GET  /api/:vaultId/native-balance
+ *   GET  /api/:vaultId/token-balances?type=erc20|src20|all&contracts=0x...
+ *   POST /api/:vaultId/src20/register-key
+ *   GET  /api/:vaultId/src20/key-status
+ *   GET  /api/:vaultId/transactions?type=...&limit=N&offset=N
  *   GET  /api/:vaultId/transactions/:txHash
  *   POST /api/:vaultId/transfer
+ *   GET  /api/contracts/:contractAddress
  *   GET  /api/metrics
  *
  */
@@ -110,10 +112,10 @@ export const configureRouter = (sdk: MainSDK): Router => {
 
   /**
    * @openapi
-   * /api/{vaultId}/balance:
+   * /api/{vaultId}/native-balance:
    *   get:
    *     tags: [Balance]
-   *     summary: Get vault native ETH balance on Seismic
+   *     summary: Get vault native ETH balance
    *     parameters:
    *       - in: path
    *         name: vaultId
@@ -126,7 +128,11 @@ export const configureRouter = (sdk: MainSDK): Router => {
    *       400:
    *         description: Invalid vaultId
    */
-  router.get("/:vaultId/balance", validate({ params: vaultIdParam }), controller.getBalance);
+  router.get(
+    "/:vaultId/native-balance",
+    validate({ params: vaultIdParam }),
+    controller.getNativeBalance
+  );
 
   /**
    * @openapi

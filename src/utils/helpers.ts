@@ -102,7 +102,7 @@ export const checkParamsAndAdjustAmount = async (
     const balanceResponse =
       type == TransactionType.FungibleToken
         ? await sdk.getFtBalances(vaultAccountId)
-        : await sdk.getBalance(vaultAccountId);
+        : await sdk.getNativeBalance(vaultAccountId);
 
     if (!balanceResponse.success) {
       throw new Error(`Could not fetch account balance to check funds sufficiency`);

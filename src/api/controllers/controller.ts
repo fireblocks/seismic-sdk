@@ -42,16 +42,16 @@ export class ApiController {
   };
 
   /**
-   * GET /api/:vaultId/balance
+   * GET /api/:vaultId/native-balance
    * Returns the vault's native ETH balance on Seismic.
    */
-  public getBalance = async (req: Request, res: Response) => {
+  public getNativeBalance = async (req: Request, res: Response) => {
     const { vaultId } = req.params;
     try {
-      const result = await this.sdk.getBalance(vaultId);
+      const result = await this.sdk.getNativeBalance(vaultId);
       res.status(200).json(result);
     } catch (error) {
-      this.handleError(error, res, "getBalance");
+      this.handleError(error, res, "getNativeBalance");
     }
   };
 

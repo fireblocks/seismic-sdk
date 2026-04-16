@@ -173,7 +173,7 @@ export class MainSDK {
    * @param vaultAccountId - The Fireblocks vault account ID
    * @returns A promise that resolves to a {GetNativeBalanceResponse}
    */
-  public getBalance = async (vaultAccountId: string): Promise<GetNativeBalanceResponse> => {
+  public getNativeBalance = async (vaultAccountId: string): Promise<GetNativeBalanceResponse> => {
     this.logger.debug(`Fetching native balance for vault ${vaultAccountId}`);
     try {
       const { address } = await this.ensureVaultData(vaultAccountId);
