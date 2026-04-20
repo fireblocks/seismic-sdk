@@ -391,7 +391,66 @@ export class ExplorerService {
   };
 
   /**
-   * Returns all ERC-20 token balances held by an address — no contract list needed.
+   * Discovers SRC-20 contract addresses an address has interacted with, using SocialScan getLogs.
+   *
+   * Scans backwards in 99k-block windows. Used as fallback when the RPC node's eth_getLogs
+   * returns "failed to decode a key from a table" for the SRC-20 Transfer topic.
+   *
+   * @param address - Vault's Seismic/ETH address
+   */
+  public discoverSrc20Contracts = async (address: string): Promise<string[]> => {
+    this.logger.debug(`Discovering SRC-20 contracts via SocialScan | address:${address}`);
+    const paddedAddress = "0x" + address.slice(2).toLowerCase().padStart(64, "0");
+    const latest = await this.getLatestBlock();
+    const contracts = new Set<string>();
+
+    for (let i = 0; i < ExplorerService.MAX_WINDOWS; i++) {
+      const hi = latest - i * ExplorerService.WINDOW_SIZE;
+      if (hi <= 0) break;
+      const lo = Math.max(0, hi - ExplorerService.WINDOW_SIZE + 1);
+      const window = { startblock: String(lo), endblock: String(hi) };
+
+      try {
+        const [sent, received] = await Promise.all([
+          this.get<ExplorerLog>({
+            module: "logs",
+            action: "getLogs",
+            topic0: SRC20_TRANSFER_TOPIC,
+            topic0_1_opr: "and",
+            topic1: paddedAddress,
+            fromBlock: window.startblock,
+            toBlock: window.endblock,
+            page: "1",
+            offset: "100",
+          }),
+          this.get<ExplorerLog>({
+            module: "logs",
+            action: "getLogs",
+            topic0: SRC20_TRANSFER_TOPIC,
+            topic0_2_opr: "and",
+            topic2: paddedAddress,
+            fromBlock: window.startblock,
+            toBlock: window.endblock,
+            page: "1",
+            offset: "100",
+          }),
+        ]);
+
+        for (const log of [...sent, ...received]) {
+          contracts.add(log.address.toLowerCase());
+        }
+      } catch (err) {
+        this.logger.warn(
+          `discoverSrc20Contracts (SocialScan): skipping window [${lo}-${hi}]: ${err}`
+        );
+      }
+    }
+
+    return [...contracts];
+  };
+
+  /**
+   * Returns all ERC-20 token balances held by an address - no contract list needed.
    * Uses SocialScan `addresstokenbalance` which aggregates all Transfer events for the address.
    *
    * @param address - Vault's Seismic/ETH address

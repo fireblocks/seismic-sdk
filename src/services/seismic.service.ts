@@ -101,9 +101,9 @@ export class BlockchainApiService {
       .replace(/\.\d{3}Z$/, " UTC");
   }
 
-  // Seismic testnet block time — used for date → block number estimation.
+  // Seismic testnet block time - used for date → block number estimation.
   private static readonly BLOCK_TIME_MS = 120;
-  // 300 windows × 99,000 blocks × 120ms ≈ 41 days — history depth before warning.
+  // 300 windows × 99,000 blocks × 120ms ≈ 41 days - history depth before warning.
   private static readonly MAX_HISTORY_MS = 300 * 99_000 * 120;
 
   /**
@@ -113,7 +113,7 @@ export class BlockchainApiService {
    * @param dateStr - Date in YYYY-MM-DD format
    * @param edge    - "start" returns the block at the start of the day (00:00 UTC),
    *                  "end" returns the block at the end of the day (23:59 UTC)
-   * @returns { blockHex, outOfRange } — blockHex is the estimated block as a hex string,
+   * @returns { blockHex, outOfRange } - blockHex is the estimated block as a hex string,
    *          outOfRange is true if the date is older than ~41 days of stored history
    */
   private async dateToBlock(
@@ -274,7 +274,7 @@ export class BlockchainApiService {
 
   /**
    * Returns all ERC-20 token balances for an address via SocialScan `addresstokenbalance`.
-   * No contract list needed — the explorer aggregates all Transfer event history.
+   * No contract list needed - the explorer aggregates all Transfer event history.
    * Requires SOCIALSCAN_API_KEY.
    */
   public getAllTokenBalances = async (address: string) => {
@@ -495,12 +495,12 @@ export class BlockchainApiService {
       if (beforeResult) {
         toBlock = beforeResult.blockHex;
         if (beforeResult.outOfRange)
-          dateOutOfRangeWarning = `'before' date (${before}) is older than ~41 days — results may be incomplete`;
+          dateOutOfRangeWarning = `'before' date (${before}) is older than ~41 days - results may be incomplete`;
       }
       if (afterResult) {
         fromBlock = afterResult.blockHex;
         if (afterResult.outOfRange)
-          dateOutOfRangeWarning = `'after' date (${after}) is older than ~41 days — results may be incomplete`;
+          dateOutOfRangeWarning = `'after' date (${after}) is older than ~41 days - results may be incomplete`;
       }
     }
 
@@ -590,7 +590,7 @@ export class BlockchainApiService {
     const paddedAddress = "0x" + address.slice(2).toLowerCase().padStart(64, "0");
     const transferTopic = isSrc20 ? SRC20_TRANSFER_TOPIC : ERC20_TRANSFER_TOPIC;
     // Only use single-window mode for explicit hex fromBlock/toBlock params (assumed to fit in 100k).
-    // before/after date ranges may span many windows — always use scanLogsUntil with bounds for those.
+    // before/after date ranges may span many windows - always use scanLogsUntil with bounds for those.
     const hexRangePinned = !!(params.fromBlock && params.toBlock) && !(before || after);
     const callerPinnedRange = hexRangePinned;
 
@@ -680,7 +680,7 @@ export class BlockchainApiService {
       ]);
 
       // EVM log topics for Transfer(address indexed from, address indexed to, bytes32 indexed encryptKeyHash, bytes encryptedAmount):
-      //   topic0 = keccak256("Transfer(...)") — event signature
+      //   topic0 = keccak256("Transfer(...)") - event signature
       //   topic1 = from address (32-byte padded)
       //   topic2 = to address   (32-byte padded)
       //   topic3 = encryptKeyHash (keccak256 of the AES viewing key used to encrypt encryptedAmount)
@@ -869,7 +869,7 @@ export class BlockchainApiService {
     };
   };
 
-  // Discovery scans all windows in parallel batches — no consecutive-empty bail-out
+  // Discovery scans all windows in parallel batches - no consecutive-empty bail-out
   // because gaps in activity shouldn't stop us finding older contracts.
   // 50 windows × 99k blocks × 120ms ≈ 7 days of history; covers most use cases.
   private static readonly DISCOVERY_WINDOWS = 50;
@@ -879,10 +879,10 @@ export class BlockchainApiService {
    * Discovers all SRC-20 contracts that have ever sent to or received from an address.
    * Scans eth_getLogs for SRC-20 Transfer events (topic1=from or topic2=to).
    * Returns unique contract addresses from log.address.
-   * No SOCIALSCAN_API_KEY needed — pure RPC.
+   * No SOCIALSCAN_API_KEY needed - pure RPC.
    *
    * Scans DISCOVERY_WINDOWS (50) backwards in parallel batches of DISCOVERY_BATCH_SIZE.
-   * Does NOT bail out on consecutive empty windows — gaps in activity are expected.
+   * Does NOT bail out on consecutive empty windows - gaps in activity are expected.
    */
   public discoverSrc20Contracts = async (address: string): Promise<string[]> => {
     const paddedAddress = "0x" + address.slice(2).toLowerCase().padStart(64, "0");
@@ -890,6 +890,7 @@ export class BlockchainApiService {
     const latest = parseInt(latestHex, 16);
     const contracts = new Set<string>();
     const seen = new Set<string>();
+    let rpcErrorCount = 0;
 
     // Build all window indices, then process in parallel batches
     const windowCount = Math.min(
@@ -906,15 +907,21 @@ export class BlockchainApiService {
           if (hi <= 0) return [];
           const lo = Math.max(0, hi - BlockchainApiService.LOG_WINDOW_SIZE + 1);
           const window = { fromBlock: `0x${lo.toString(16)}`, toBlock: `0x${hi.toString(16)}` };
-          const [sent, received] = await Promise.all([
-            this.jsonRpc<EthLog[]>("eth_getLogs", [
-              { ...window, topics: [SRC20_TRANSFER_TOPIC, paddedAddress, null] },
-            ]),
-            this.jsonRpc<EthLog[]>("eth_getLogs", [
-              { ...window, topics: [SRC20_TRANSFER_TOPIC, null, paddedAddress] },
-            ]),
-          ]);
-          return [...sent, ...received];
+          try {
+            const [sent, received] = await Promise.all([
+              this.jsonRpc<EthLog[]>("eth_getLogs", [
+                { ...window, topics: [SRC20_TRANSFER_TOPIC, paddedAddress, null] },
+              ]),
+              this.jsonRpc<EthLog[]>("eth_getLogs", [
+                { ...window, topics: [SRC20_TRANSFER_TOPIC, null, paddedAddress] },
+              ]),
+            ]);
+            return [...sent, ...received];
+          } catch (err) {
+            rpcErrorCount++;
+            this.logger.warn(`discoverSrc20Contracts: skipping window [${lo}-${hi}]: ${err}`);
+            return [];
+          }
         })
       );
 
@@ -925,6 +932,17 @@ export class BlockchainApiService {
           contracts.add(log.address.toLowerCase());
         }
       }
+    }
+
+    // If RPC had errors and found nothing, fall back to SocialScan which has a clean log index.
+    const apiKey = process.env.SOCIALSCAN_API_KEY;
+    if (contracts.size === 0 && rpcErrorCount > 0 && apiKey) {
+      this.logger.info(
+        `discoverSrc20Contracts: RPC had ${rpcErrorCount} errors and found no contracts - falling back to SocialScan`
+      );
+      const explorer = new ExplorerService(apiKey, this.chainId === 5124, this.rpcUrl);
+      const fallbackContracts = await explorer.discoverSrc20Contracts(address);
+      return fallbackContracts;
     }
 
     return [...contracts];
