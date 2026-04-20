@@ -57,7 +57,7 @@ export class ApiController {
 
   /**
    * GET /api/:vaultId/token-balances?type=erc20|src20|all&contracts=0x...
-   * Returns ERC-20 and/or SRC-20 token balances. Contracts are optional — omitting
+   * Returns ERC-20 and/or SRC-20 token balances. Contracts are optional - omitting
    * them triggers auto-discovery. When type=all, each type fails independently:
    * the response is always 200 with whatever succeeded, plus error fields for what failed.
    */

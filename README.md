@@ -145,7 +145,7 @@ When `type=all`, each type is fetched in parallel and fails independently. If on
     "limit": 10,
     "offset": 0,
     "hasMore": true,
-    "warning": "optional — present when date is out of history range"
+    "warning": "optional - present when date is out of history range"
   }
 }
 ```

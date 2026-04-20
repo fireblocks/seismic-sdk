@@ -168,7 +168,7 @@ export const configureRouter = (sdk: MainSDK): Router => {
    *     tags: [Balance]
    *     summary: Get ERC-20 and/or SRC-20 token balances
    *     description: |
-   *       Returns token balances grouped by type. Contracts are optional — omitting
+   *       Returns token balances grouped by type. Contracts are optional - omitting
    *       them triggers auto-discovery (ERC-20 via SocialScan, SRC-20 via eth_getLogs).
    *
    *       When `type=all` (default), both types are fetched in parallel. If one fails
