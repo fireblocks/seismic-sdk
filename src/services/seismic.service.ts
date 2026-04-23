@@ -322,15 +322,7 @@ export class BlockchainApiService {
     try {
       const hexGasPrice = await this.jsonRpc<string>("eth_gasPrice", []);
       const gasPriceWei = BigInt(hexGasPrice);
-      let gasLimit = 50_000n;
-      try {
-        const hexGasLimit = await this.jsonRpc<string>("eth_estimateGas", [
-          { to: "0x0000000000000000000000000000000000000000", value: "0x0", data: "0x" },
-        ]);
-        gasLimit = BigInt(hexGasLimit);
-      } catch {
-        // use fallback
-      }
+      const gasLimit = 100_000n;
       const feeWei = gasPriceWei * gasLimit;
       return Number(feeWei) / 10 ** chain_info.coinDecimals;
     } catch (error) {
@@ -370,18 +362,14 @@ export class BlockchainApiService {
 
       const valueWei = BigInt(Math.round(amount * 10 ** chain_info.coinDecimals));
 
-      const [hexNonce, hexGasPrice, hexGasEstimate] = await Promise.all([
+      const [hexNonce, hexGasPrice] = await Promise.all([
         this.jsonRpc<string>("eth_getTransactionCount", [sender, "latest"]),
         this.jsonRpc<string>("eth_gasPrice", []),
-        this.jsonRpc<string>("eth_estimateGas", [
-          { from: sender, to: recipient, value: `0x${valueWei.toString(16)}`, data: "0x" },
-        ]).catch(() => null),
       ]);
 
       const nonce = parseInt(hexNonce, 16);
       const gasPrice = BigInt(hexGasPrice);
-      // Add 20% buffer to estimate; fall back to 50_000 if estimation failed
-      const gasLimit = hexGasEstimate ? (BigInt(hexGasEstimate) * 120n) / 100n : 50_000n;
+      const gasLimit = 100_000n;
 
       const evmTxFields = {
         from: sender,
