@@ -529,11 +529,28 @@ export class BlockchainApiService {
       }
 
       if (type === "all") {
-        const [native, erc20] = await Promise.all([
+        const src20Params = {
+          address,
+          type: "src20" as const,
+          contracts,
+          limit,
+          offset,
+          encryptionSk,
+          viewingKey,
+          fromBlock,
+          toBlock,
+          before,
+          after,
+        };
+        const [native, erc20, src20Result] = await Promise.allSettled([
           explorer.getNativeTransactions(address, limit, offset),
           explorer.getErc20Transactions(address, contracts?.[0], limit, offset),
+          this.getTransactionHistory(src20Params),
         ]);
-        const merged = [...native, ...erc20].sort((a, b) =>
+        const nativeTxs = native.status === "fulfilled" ? native.value : [];
+        const erc20Txs = erc20.status === "fulfilled" ? erc20.value : [];
+        const src20Txs = src20Result.status === "fulfilled" ? src20Result.value.transactions : [];
+        const merged = [...nativeTxs, ...erc20Txs, ...src20Txs].sort((a, b) =>
           (b.timestamp ?? "").localeCompare(a.timestamp ?? "")
         );
         const allPage = merged.slice(0, limit);
@@ -541,7 +558,7 @@ export class BlockchainApiService {
           transactions: allPage,
           fromBlock: "0",
           toBlock: "latest",
-          source: "socialscan-txlist+tokentx",
+          source: "socialscan-txlist+tokentx+eth_getLogs",
           total: merged.length,
           warning: dateOutOfRangeWarning,
         };

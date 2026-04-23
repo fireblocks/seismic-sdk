@@ -104,7 +104,7 @@ export class ApiController {
       const parsedOffset = offset !== undefined ? parseInt(offset) : 0;
       const result = await this.sdk.getTransactionHistory({
         vaultId,
-        type: (type as "native" | "erc20" | "src20" | "all") ?? "erc20",
+        type: (type as "native" | "erc20" | "src20" | "all") ?? "all",
         fromBlock,
         toBlock,
         before,
