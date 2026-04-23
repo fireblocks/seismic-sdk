@@ -282,6 +282,54 @@ export class MainSDK {
   };
 
   /**
+   * Unified transfer method - handles ETH, ERC-20, and SRC-20, vault-to-vault or vault-to-address.
+   *
+   * Exactly one of `recipient` (EVM address) or `destinationVaultId` (Fireblocks vault ID) must be set.
+   * `contractAddress` is required for ERC20 and SRC20 types.
+   *
+   * @example vault-to-vault ETH
+   *   sdk.transfer({ vaultId: "0", type: "ETH", destinationVaultId: "1", amount: 0.5 })
+   * @example vault-to-address ERC-20
+   *   sdk.transfer({ vaultId: "0", type: "ERC20", recipient: "0xABC...", amount: 100, contractAddress: "0xDEF..." })
+   */
+  public transfer = async (params: {
+    vaultId: string;
+    type: "ETH" | "ERC20" | "SRC20";
+    recipient?: string;
+    destinationVaultId?: string;
+    amount: number;
+    contractAddress?: string;
+    decimals?: number;
+    note?: string;
+  }): Promise<CreateTransactionResponse> => {
+    const {
+      vaultId,
+      type,
+      recipient,
+      destinationVaultId,
+      amount,
+      contractAddress,
+      decimals,
+      note,
+    } = params;
+
+    if (!recipient && !destinationVaultId) {
+      return { success: false, error: "Either recipient or destinationVaultId must be provided" };
+    }
+    if (type !== "ETH" && !contractAddress) {
+      return { success: false, error: "contractAddress is required for ERC20 and SRC20 transfers" };
+    }
+
+    const to = destinationVaultId ? await this.getSeismicAddress(destinationVaultId) : recipient!;
+
+    if (type === "SRC20")
+      return this.createShieldedTransaction(vaultId, to, amount, contractAddress!, note);
+    if (type === "ERC20")
+      return this.createErc20Transaction(vaultId, to, amount, contractAddress!, decimals, note);
+    return this.createNativeTransaction(vaultId, to, amount, false, note);
+  };
+
+  /**
    * Creates a native coin transaction to transfer funds to a recipient address.
    *
    * @param vaultAccountId - The Fireblocks vault account ID
@@ -437,68 +485,6 @@ export class MainSDK {
       return { success: true, txHash: result.txid };
     } catch (error) {
       this.logger.error(`Failed to create ERC-20 transaction: ${formatErrorMessage(error)}`);
-      return { success: false, error: formatErrorMessage(error) };
-    }
-  };
-
-  /**
-   * Creates a fungible token transaction to transfer tokens to a recipient address.
-   *
-   * @param vaultAccountId - The Fireblocks vault account ID
-   * @param recipientAddress - The address of the recipient
-   * @param amount - The amount to transfer
-   * @param token - The fungible token type
-   * @param note - Optional note attached to the raw signing request
-   * @returns {CreateTransactionResponse} Promise
-   */
-  public createFTTransaction = async (
-    vaultAccountId: string,
-    recipientAddress: string,
-    amount: number,
-    token: TokenType,
-    note?: string
-  ): Promise<CreateTransactionResponse> => {
-    try {
-      const vaultData = await this.ensureVaultData(vaultAccountId);
-
-      const paramsValidationResponse = await checkParamsAndAdjustAmount(
-        this,
-        vaultAccountId,
-        recipientAddress,
-        amount,
-        undefined,
-        TransactionType.FungibleToken,
-        token
-      );
-
-      if (!paramsValidationResponse.validParams) {
-        return {
-          success: false,
-          error: `Invalid transaction parameters: ${paramsValidationResponse.reason}`,
-        };
-      }
-
-      amount = unitsToCoin(paramsValidationResponse.finalAmount!);
-
-      const result = await this.buildSignSendTransaction(
-        vaultData,
-        recipientAddress,
-        amount,
-        TransactionType.FungibleToken,
-        token,
-        note
-      );
-
-      if (!result || result.err) {
-        return {
-          success: false,
-          error: result?.err ? formatErrorMessage(result.err) : "unknown error",
-        };
-      }
-
-      return { success: true, txHash: result.txid };
-    } catch (error: unknown) {
-      this.logger.error(`Failed to create FT transaction: ${formatErrorMessage(error)}`);
       return { success: false, error: formatErrorMessage(error) };
     }
   };
