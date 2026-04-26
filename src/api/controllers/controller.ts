@@ -242,6 +242,30 @@ export class ApiController {
     }
   };
 
+  /**
+   * POST /api/explorer/validate-key
+   * Validates a SocialScan Explorer API key provided in the request body.
+   */
+  public validateExplorerApiKey = async (req: Request, res: Response) => {
+    const { apiKey } = req.body as { apiKey?: string };
+    if (!apiKey) {
+      res.status(400).json({ success: false, error: "apiKey is required in request body" });
+      return;
+    }
+    try {
+      const result = await this.sdk.validateExplorerApiKey(apiKey);
+      const statusCodeMap: Record<string, number> = {
+        valid: 200,
+        invalid_key: 401,
+        service_error: 502,
+      };
+      const statusCode = statusCodeMap[result.status] ?? 500;
+      res.status(statusCode).json({ success: result.valid, data: result });
+    } catch (error) {
+      this.handleError(error, res, "validateExplorerApiKey");
+    }
+  };
+
   // ─── Error handling ──────────────────────────────────────────────────────────
 
   private handleError(error: unknown, res: Response, endpoint: string): void {

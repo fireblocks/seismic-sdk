@@ -1,3 +1,4 @@
+import { AxiosError } from "axios";
 import axiosInstance from "../utils/httpClient.js";
 import { Transaction, TransactionType } from "../types/index.js";
 import {
@@ -490,5 +491,48 @@ export class ExplorerService {
           rawBalance: t.TokenQuantity,
         };
       });
+  };
+
+  /**
+   * Validates the SocialScan API key by making a lightweight request.
+   *
+   * @returns `status` distinguishes the failure cause:
+   *  - `"valid"` - key accepted
+   *  - `"invalid_key"` - key rejected by SocialScan (401/403)
+   *  - `"service_error"` - explorer unreachable or returned a non-auth error
+   */
+  public validateApiKey = async (): Promise<{
+    valid: boolean;
+    status: "valid" | "invalid_key" | "service_error";
+    error?: string;
+  }> => {
+    try {
+      // Use a minimal query - fetch token balances for the zero address.
+      // A valid key returns status "1" or "0" with "No records found";
+      // an invalid key returns an auth error.
+      await this.get<ExplorerTokenBalance>({
+        module: "account",
+        action: "addresstokenbalance",
+        address: "0x0000000000000000000000000000000000000000",
+      });
+      return { valid: true, status: "valid" };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      // Axios HTTP errors carry a response status we can inspect
+      if (error instanceof AxiosError && error.response) {
+        const httpStatus = error.response.status;
+        if (httpStatus === 401 || httpStatus === 403) {
+          return { valid: false, status: "invalid_key", error: message };
+        }
+        // 4xx/5xx that isn't auth - explorer is having issues
+        return {
+          valid: false,
+          status: "service_error",
+          error: `Explorer returned HTTP ${httpStatus}: ${message}`,
+        };
+      }
+      // Network errors (ECONNREFUSED, timeout, DNS failure, etc.)
+      return { valid: false, status: "service_error", error: message };
+    }
   };
 }

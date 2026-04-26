@@ -68,6 +68,45 @@ export const configureRouter = (sdk: MainSDK): Router => {
     controller.getContractInfo
   );
 
+  // ─── Explorer API key validation ───────────────────────────────────────
+
+  /**
+   * @openapi
+   * /api/explorer/validate-key:
+   *   post:
+   *     tags: [Explorer]
+   *     summary: Validate a SocialScan Explorer API key
+   *     description: |
+   *       Makes a lightweight request to the SocialScan API to check whether the
+   *       provided API key is valid and accepted.
+   *
+   *       Response `data.status` distinguishes the failure cause:
+   *       - `valid` - key accepted
+   *       - `invalid_key` - key rejected by SocialScan (401/403)
+   *       - `service_error` - explorer unreachable or returned a non-auth error
+   *     requestBody:
+   *       required: true
+   *       content:
+   *         application/json:
+   *           schema:
+   *             type: object
+   *             required: [apiKey]
+   *             properties:
+   *               apiKey:
+   *                 type: string
+   *                 description: SocialScan API key to validate
+   *     responses:
+   *       200:
+   *         description: API key is valid
+   *       400:
+   *         description: apiKey missing from request body
+   *       401:
+   *         description: API key is invalid (invalid_key)
+   *       502:
+   *         description: Explorer service is unreachable or erroring (service_error)
+   */
+  router.post("/explorer/validate-key", controller.validateExplorerApiKey);
+
   // ─── Seismic routes ────────────────────────────────────────────────────
 
   /**

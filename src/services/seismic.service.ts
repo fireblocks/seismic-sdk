@@ -289,6 +289,25 @@ export class BlockchainApiService {
   };
 
   /**
+   * Validates a SocialScan Explorer API key by making a lightweight request.
+   * Returns `status` to distinguish auth failures from service issues.
+   *
+   * @param apiKey - The SocialScan API key to validate
+   */
+  public validateExplorerApiKey = async (apiKey: string): Promise<{
+    valid: boolean;
+    status: "valid" | "invalid_key" | "service_error";
+    error?: string;
+  }> => {
+    const explorer = new ExplorerService(
+      apiKey,
+      this.chainId === SEISMIC_CHAIN_ID.testnet,
+      this.rpcUrl
+    );
+    return explorer.validateApiKey();
+  };
+
+  /**
    * Returns fungible token balances for a Seismic address.
    *
    * SRC-20 balances are encrypted on-chain and require a Fireblocks-signed read

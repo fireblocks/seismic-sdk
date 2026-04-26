@@ -923,6 +923,20 @@ export class MainSDK {
    *
    * @returns Promise that resolves when shutdown is complete
    */
+  /**
+   * Validates the SocialScan Explorer API key.
+   * Makes a lightweight request to the SocialScan API to confirm the key is accepted.
+   *
+   * @returns Object with `valid` boolean and optional `error` message
+   */
+  public async validateExplorerApiKey(apiKey: string): Promise<{
+    valid: boolean;
+    status: "valid" | "invalid_key" | "service_error";
+    error?: string;
+  }> {
+    return this.blockchainApiService.validateExplorerApiKey(apiKey);
+  }
+
   public async shutdown(): Promise<void> {
     this.logger.info("Shutting down MainSDK...");
     for (const vaultData of this.vaultData.values()) {
