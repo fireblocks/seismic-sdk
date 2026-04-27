@@ -2,11 +2,14 @@ import { fileURLToPath } from "url";
 import path, { dirname } from "path";
 import { BasePath } from "@fireblocks/ts-sdk";
 import express, { Request, Response } from "express";
+import dotenv from "dotenv";
 
 import { config, Logger, getSwaggerSpec, swaggerUi } from "./utils/index.js";
 import { MainSDK } from "./MainSDK.js";
 import { configureRouter } from "./api/router.js";
 import { collectDefaultMetrics } from "prom-client";
+
+dotenv.config();
 
 collectDefaultMetrics();
 
@@ -26,7 +29,6 @@ const startServer = () => {
 
   app.use(express.json());
   app.use(express.urlencoded({ extended: true }));
-  app.use(errorHandler);
 
   // Initialize a single shared SDK instance
   const sdk = new MainSDK({
@@ -72,6 +74,8 @@ const startServer = () => {
   const __filename = fileURLToPath(import.meta.url);
   const __dirname = dirname(__filename);
   app.use("/docs", express.static(path.join(__dirname, "../docs")));
+
+  app.use(errorHandler);
 
   app.listen(config.PORT, () => {
     logger.info(`${config.APP_NAME} listening on port ${config.PORT}`);

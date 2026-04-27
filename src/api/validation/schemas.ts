@@ -127,7 +127,7 @@ export const submitTransactionBody = z.object({
     .object({
       operation: z.string().min(1, "operation is required"),
     })
-    .loose(),
+    .strict(),
   waitForCompletion: z.boolean().optional().default(true),
 });
 
@@ -135,41 +135,18 @@ export const submitTransactionBody = z.object({
 // SEISMIC-SPECIFIC SCHEMAS
 // ============================================================================
 
-const dateParam = (name: string) =>
-  z
-    .string()
-    .optional()
-    .refine((val) => !val || /^\d{4}-\d{2}-\d{2}$/.test(val), {
-      message: `${name} must be a valid date in YYYY-MM-DD format`,
-    })
-    .refine((val) => !val || !isNaN(new Date(val).getTime()), {
-      message: `${name} must be a valid date`,
-    });
-
 /**
  * Validates query params for GET /api/:vaultId/transactions
  */
 export const transactionsQuery = z.object({
   type: z.enum(["native", "erc20", "src20", "all"]).optional(),
   contracts: z.string().optional(),
-  limit: z
-    .string()
-    .optional()
-    .transform((val) => (val ? parseInt(val, 10) : undefined))
-    .refine((val) => val === undefined || (!isNaN(val) && val > 0), {
-      message: "limit must be a positive number",
-    }),
-  offset: z
-    .string()
-    .optional()
-    .transform((val) => (val ? parseInt(val, 10) : undefined))
-    .refine((val) => val === undefined || (!isNaN(val) && val >= 0), {
-      message: "offset must be a non-negative number",
-    }),
+  limit: z.string().optional(),
+  offset: z.string().optional(),
   fromBlock: z.string().optional(),
   toBlock: z.string().optional(),
-  before: dateParam("before"),
-  after: dateParam("after"),
+  before: z.string().optional(),
+  after: z.string().optional(),
 });
 
 /**
@@ -228,7 +205,12 @@ export const transferBody = z
       .string()
       .regex(/^\d+$/, "destinationVaultId must be a numeric string")
       .optional(),
-    amount: z.number().positive("amount must be positive"),
+    amount: z
+      .string()
+      .refine(
+        (val) => !isNaN(parseFloat(val)) && parseFloat(val) > 0,
+        "amount must be a positive number string"
+      ),
     contractAddress: z
       .string()
       .regex(/^0x[0-9a-fA-F]{40}$/, "contractAddress must be a valid EVM address")

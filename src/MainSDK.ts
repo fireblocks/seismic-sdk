@@ -8,6 +8,7 @@ import {
   numberToHex,
   keccak256,
   serializeTransaction,
+  parseUnits,
 } from "viem";
 import { toAccount } from "viem/accounts";
 import { FireblocksService, BlockchainApiService } from "./services/index.js";
@@ -19,6 +20,7 @@ import {
   GetFtBalancesResponse,
   GetNativeBalanceResponse,
   TokenType,
+  Transaction,
   TransactionType,
   VaultData,
 } from "./types/index.js";
@@ -93,7 +95,12 @@ export class MainSDK {
     return entry;
   }
 
-  public async getErc20Info(contractAddress: string) {
+  public async getErc20Info(contractAddress: string): Promise<{
+    name: string | null;
+    symbol: string | null;
+    decimals: number | null;
+    totalSupply: string | null;
+  }> {
     return this.blockchainApiService.getErc20Info(contractAddress);
   }
 
@@ -111,7 +118,14 @@ export class MainSDK {
     contracts?: string[];
     limit?: number;
     offset?: number;
-  }) {
+  }): Promise<{
+    transactions: Transaction[];
+    fromBlock: string;
+    toBlock: string;
+    source: string;
+    total: number;
+    warning?: string;
+  }> {
     const vaultData = await this.ensureVaultData(params.vaultId);
 
     let encryptionSk: Hex | undefined;
@@ -297,7 +311,7 @@ export class MainSDK {
     type: "ETH" | "ERC20" | "SRC20";
     recipient?: string;
     destinationVaultId?: string;
-    amount: number;
+    amount: string;
     contractAddress?: string;
     decimals?: number;
     note?: string;
@@ -342,7 +356,7 @@ export class MainSDK {
   public createNativeTransaction = async (
     vaultAccountId: string,
     recipientAddress: string,
-    amount: number,
+    amount: string,
     grossTransaction: boolean = false,
     note?: string
   ): Promise<CreateTransactionResponse> => {
@@ -365,12 +379,12 @@ export class MainSDK {
         };
       }
 
-      amount = unitsToCoin(paramsValidationResponse.finalAmount!);
+      const adjustedAmount = unitsToCoin(paramsValidationResponse.finalAmount!);
 
       const result = await this.buildSignSendTransaction(
         vaultData,
         recipientAddress,
-        amount,
+        adjustedAmount,
         TransactionType.Native,
         undefined,
         note
@@ -404,7 +418,7 @@ export class MainSDK {
   public createErc20Transaction = async (
     vaultAccountId: string,
     recipientAddress: string,
-    amount: number,
+    amount: string,
     contractAddress: string,
     decimals?: number,
     note?: string
@@ -416,7 +430,7 @@ export class MainSDK {
         decimals ??
         (await this.blockchainApiService.getErc20Info(contractAddress)).decimals ??
         DEFAULT_TOKEN_DECIMALS;
-      const amountWei = BigInt(Math.round(amount * 10 ** resolvedDecimals));
+      const amountWei = parseUnits(amount, resolvedDecimals);
 
       // Encode transfer(address,uint256) calldata
       const paddedTo = recipientAddress.slice(2).toLowerCase().padStart(64, "0");
@@ -425,11 +439,11 @@ export class MainSDK {
 
       // Build unsigned tx: to=contract, value=0, data=calldata
       const [hexNonce, hexGasPrice] = await Promise.all([
-        this.blockchainApiService["jsonRpc"]<string>("eth_getTransactionCount", [
+        this.blockchainApiService.jsonRpc<string>("eth_getTransactionCount", [
           vaultData.address,
           "latest",
         ]),
-        this.blockchainApiService["jsonRpc"]<string>("eth_gasPrice", []),
+        this.blockchainApiService.jsonRpc<string>("eth_gasPrice", []),
       ]);
 
       const nonce = parseInt(hexNonce, 16);
@@ -566,7 +580,7 @@ export class MainSDK {
     vaultId: string,
     type: "erc20" | "src20" | "all" = "all",
     contracts?: string[]
-  ) => {
+  ): Promise<Record<string, unknown>> => {
     const { address } = await this.ensureVaultData(vaultId);
 
     const fetchErc20 = async () => {
@@ -851,7 +865,7 @@ export class MainSDK {
   public createShieldedTransaction = async (
     vaultId: string,
     recipient: string,
-    amount: number,
+    amount: string,
     contractAddress: string,
     note?: string
   ): Promise<CreateTransactionResponse> => {
@@ -898,7 +912,7 @@ export class MainSDK {
         encryptionSk
       );
 
-      const amountBigInt = BigInt(Math.round(amount * 10 ** 18));
+      const amountBigInt = parseUnits(amount, 18);
       const txHash = await this.blockchainApiService.submitShieldedTransfer(
         client,
         contractAddress as Address,

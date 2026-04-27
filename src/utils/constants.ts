@@ -127,3 +127,8 @@ export const ftInfo: Partial<Record<TokenType, TokenInfo>> = {
     decimals: 18,
   },
 };
+
+export const POLLING_CONSTANTS = {
+  MAX_POLL_MS: 300_000, // 5 minutes
+  MAX_BACKOFF_MS: 30_000, // 30 seconds max delay
+};

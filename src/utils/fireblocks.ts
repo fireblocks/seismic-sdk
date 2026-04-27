@@ -7,7 +7,7 @@ import {
   TransactionStateEnum,
   VaultsApiGetPublicKeyInfoRequest,
 } from "@fireblocks/ts-sdk";
-import { Logger, derivationPath, formatErrorMessage } from "./index.js";
+import { Logger, POLLING_CONSTANTS, derivationPath, formatErrorMessage } from "./index.js";
 
 const logger = new Logger("utils:fireblocks");
 
@@ -59,6 +59,9 @@ export const getTxStatus = async (
   fireblocks: Fireblocks,
   pollingInterval: number = 1000
 ): Promise<TransactionResponse> => {
+  const startTime = Date.now();
+  let currentDelay = pollingInterval;
+
   try {
     let txResponse: FireblocksResponse<TransactionResponse> =
       await fireblocks.transactions.getTransaction({ txId });
@@ -68,12 +71,19 @@ export const getTxStatus = async (
       `Transaction ${txResponse.data.id} is currently at status - ${txResponse.data.status}`
     );
 
-    // Poll until terminal state
+    // Poll until terminal state or timeout
     while (
       txResponse.data.status !== TransactionStateEnum.Completed &&
       txResponse.data.status !== TransactionStateEnum.Broadcasting
     ) {
-      await new Promise((resolve) => setTimeout(resolve, pollingInterval));
+      // Check timeout
+      if (Date.now() - startTime > POLLING_CONSTANTS.MAX_POLL_MS) {
+        throw new Error(
+          `Transaction ${txId} timed out after ${POLLING_CONSTANTS.MAX_POLL_MS}ms in status ${txResponse.data.status}`
+        );
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, currentDelay));
 
       txResponse = await fireblocks.transactions.getTransaction({
         txId: txId,
@@ -97,6 +107,9 @@ export const getTxStatus = async (
         default:
           break;
       }
+
+      // Exponential backoff: increase delay by 1.5x, capped at MAX_BACKOFF_MS
+      currentDelay = Math.min(Math.round(currentDelay * 1.5), POLLING_CONSTANTS.MAX_BACKOFF_MS);
     }
 
     logger.info(

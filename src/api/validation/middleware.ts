@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from "express";
-import { ZodError, ZodObject, ZodRawShape } from "zod";
+import { ZodError } from "zod";
 
 import { Logger, LogLevel } from "../../utils/logger.js";
 
@@ -11,9 +11,9 @@ const logger = new Logger("app:server-initializer");
  * Configuration for validation middleware
  */
 interface ValidationConfig {
-  params?: ZodObject<ZodRawShape>;
-  query?: ZodObject<ZodRawShape>;
-  body?: ZodObject<ZodRawShape>;
+  params?: { parseAsync: (data: unknown) => Promise<Record<string, string>> };
+  query?: { parseAsync: (data: unknown) => Promise<Record<string, unknown>> };
+  body?: { parseAsync: (data: unknown) => Promise<Record<string, unknown>> };
 }
 
 /**
@@ -40,11 +40,11 @@ export const validate = (config: ValidationConfig) => {
       // Validate each part of the request independently
       if (config.params) {
         const validatedParams = await config.params.parseAsync(req.params);
-        Object.assign(req.params, validatedParams);
+        req.params = { ...validatedParams } as Record<string, string>;
       }
       if (config.query) {
         const validatedQuery = await config.query.parseAsync(req.query);
-        Object.assign(req.query, validatedQuery);
+        (req.query as unknown) = { ...validatedQuery };
       }
       if (config.body) {
         req.body = await config.body.parseAsync(req.body);
@@ -61,7 +61,7 @@ export const validate = (config: ValidationConfig) => {
         }));
 
         // Respond with 400 Bad Request and validation error details
-        
+
         logger.warn("Validation error", { errors: formattedErrors });
 
         res.status(400).json({
