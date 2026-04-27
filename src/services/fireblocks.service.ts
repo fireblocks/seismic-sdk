@@ -8,6 +8,7 @@ import {
   getTxStatus,
   formatErrorMessage,
   getFinalFireblocksSDKParams,
+  withRetry,
 } from "../utils/index.js";
 
 /**
@@ -164,9 +165,14 @@ export class FireblocksService {
     transactionPayload: TransactionRequest
   ): Promise<SignedMessage | null> => {
     try {
-      const transactionResponse = await this.fireblocksSDK.transactions.createTransaction({
-        transactionRequest: transactionPayload,
-      });
+      const transactionResponse = await withRetry(
+        () =>
+          this.fireblocksSDK.transactions.createTransaction({
+            transactionRequest: transactionPayload,
+          }),
+        3,
+        1000
+      );
 
       const txId = transactionResponse.data.id;
       if (!txId) throw new Error("Transaction ID is undefined.");
