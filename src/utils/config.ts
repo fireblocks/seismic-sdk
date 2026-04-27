@@ -45,6 +45,7 @@ const loadConfigFromEnv = (): Config => {
       basePath: validateBasePath(process.env.BASE_PATH || ""),
     },
     APP_NAME: getPackageName() || "Fireblocks SDK",
+    TESTNET: process.env.NETWORK === "testnet",
   };
 };
 
@@ -57,6 +58,7 @@ const mergeConfig = (customConfig: CustomConfig): Config => {
       basePath: BasePath.US,
     },
     APP_NAME: getPackageName() || "Fireblocks SDK",
+    TESTNET: process.env.NETWORK === "testnet",
   };
 
   return {
@@ -67,6 +69,7 @@ const mergeConfig = (customConfig: CustomConfig): Config => {
       basePath: customConfig.FIREBLOCKS?.basePath ?? defaults.FIREBLOCKS.basePath,
     },
     APP_NAME: customConfig.APP_NAME ?? defaults.APP_NAME,
+    TESTNET: customConfig.TESTNET ?? defaults.TESTNET,
   };
 };
 

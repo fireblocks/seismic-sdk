@@ -35,6 +35,7 @@
 
 // Add your custom types below this line (Below are some generic Request/Response types for SDK functions, adjusted as needed.)
 
+import { type Hex } from "viem";
 import { BasePath } from "@fireblocks/ts-sdk";
 import { GetTransactionsHistoryOpts } from "./index.js";
 
@@ -89,8 +90,48 @@ export type GetTransactionHistoryResponse = {
 
 export type GetTransactionHistoryFromIndexerOpts = {
   address: string;
+  /**
+   * Asset type to fetch:
+   * - "native"  → ETH transfers (requires SOCIALSCAN_API_KEY; no logs on RPC)
+   * - "erc20"   → Standard ERC-20 Transfer events
+   * - "src20"   → Seismic SRC-20 Transfer events (encrypted amounts, requires contracts filter)
+   * - "all"     → Native + ERC-20 merged (requires SOCIALSCAN_API_KEY for native)
+   * Defaults to "erc20" (always available via eth_getLogs fallback).
+   */
+  type?: "native" | "erc20" | "src20" | "all";
+  /** Hex block number or "earliest"/"latest". Defaults to "earliest". */
+  fromBlock?: string;
+  /** Hex block number or "earliest"/"latest". Defaults to "latest". */
+  toBlock?: string;
+  /**
+   * Return transactions on or before this date (YYYY-MM-DD).
+   * Converted internally to an approximate block number using the current block and ~120ms block time.
+   * Overrides toBlock if both are provided.
+   */
+  before?: string;
+  /**
+   * Return transactions on or after this date (YYYY-MM-DD).
+   * Converted internally to an approximate block number using the current block and ~120ms block time.
+   * Overrides fromBlock if both are provided.
+   */
+  after?: string;
+  /** Optional contract addresses to filter by. If omitted, scans all contracts. */
+  contracts?: string[];
   limit?: number;
   offset?: number;
+  /**
+   * Vault's encryption private key (32-byte hex).
+   * When provided for type "src20", each transaction's encrypted calldata is
+   * decrypted client-side and the plaintext amount is returned instead of 0.
+   * Derive this via MainSDK.deriveEncryptionKey(vaultId).
+   */
+  encryptionSk?: Hex;
+  /**
+   * AES viewing key (32-byte hex) registered in the Seismic Directory precompile.
+   * When provided, amounts are decrypted directly from Transfer event data - no per-tx RPC calls.
+   * Takes priority over encryptionSk. Derive via MainSDK.deriveViewingKey(vaultId).
+   */
+  viewingKey?: Hex;
 };
 
 export type GetTransactionHistoryParams =
@@ -101,8 +142,22 @@ export type GetTransactionHistoryParams =
  * Generic unsigned transaction object returned by buildUnsignedTransaction / serializeTransaction.
  * Implementors should extend this with blockchain-specific fields.
  */
+export interface EvmTxFields {
+  from: string;
+  to: string;
+  value: string;
+  data: string;
+  nonce: string;
+  gasPrice: string;
+  gas: string;
+}
+
 export interface UnsignedTransaction {
   unsignedTx?: unknown;
+  /** EIP-155 keccak256 hash of the RLP-encoded tx - this is what Fireblocks signs */
+  signingHash?: string;
+  /** Raw EVM transaction fields, needed to assemble the signed RLP after signing */
+  evmTxFields?: EvmTxFields;
   signature?: unknown;
   [key: string]: unknown;
 }
@@ -117,8 +172,10 @@ export type Transaction = {
   sender: string;
   recipient: string;
   amount: number;
+  /** Raw AES-GCM ciphertext from a SRC-20 Transfer event. Present only for SRC-20 txs. */
+  encryptedAmount?: string;
   transaction_hash: string;
-  timestamp?: string | number;
+  timestamp?: string; // ISO-8601 date string
   success: boolean;
 };
 
@@ -128,12 +185,13 @@ export enum TransactionType {
 }
 
 /**
- * Token types enumeration for different blockchain assets, including native coins and custom tokens.
- * can be names or identifiers depending on the blockchain, adjust as needed.
+ * Token types for Seismic.
+ * SRC20 is Seismic's privacy-preserving ERC-20 variant - balances are stored
+ * as encrypted suint256 values and require signed reads to query.
  */
 export enum TokenType {
-  Native = "NATIVE", // Represents the blockchain's native coin, e.g., ETH for Ethereum, BTC for Bitcoin, adjust name as needed
-  ShitCoinExample = "RANDOM_SHITCOIN_EXAMPLE", // Example of a custom fungible token type for the blockchain, adjust as needed
+  Native = "NATIVE",
+  SRC20 = "SRC20",
 }
 
 /** Information about a specific token, including its ID, name, and decimal precision.
@@ -145,13 +203,12 @@ export type TokenInfo = {
   decimals: number;
 };
 /**
- * Enumeration for different blockchain network environments.
- * Some blockchains need the network name or identifier to be specified with API requests.
- * Adjust names as needed based on supported networks.
+ * Seismic network environments.
+ * Only testnet (chain ID 5124) is currently live.
  */
 export enum Networks {
-  Mainnet = "example_mainnet", // Adjust name as needed
-  Testnet = "example_testnet", // Adjust name as needed
+  Mainnet = "seismic_mainnet",
+  Testnet = "seismic_testnet",
 }
 
 export type SDKResponse =
@@ -163,9 +220,22 @@ export type SDKResponse =
 /**
  * Per-vault identity state cached in MainSDK's vault map.
  * Populated lazily on first use of each vault account.
+ * encryptionSk is derived once per session from a deterministic Fireblocks RAW signature
+ * (SHA-256 of fullSig over SEED_MESSAGE) and cached in process memory only - never on disk.
  */
 export interface VaultData {
   vaultAccountId: string;
   address: string;
   publicKey: string;
+  encryptionSk?: string; // 32-byte hex; in-memory only, zeroed on shutdown
+  viewingKey?: string; // keccak256(encryptionSk); in-memory only, zeroed on shutdown
+  viewingKeyRegistered?: boolean; // cached Directory registration status
 }
+
+/**
+ * Transfer type for POST /api/:vaultId/transfer.
+ * ETH  - plain ETH transfer
+ * ERC20 - standard plaintext ERC-20 transfer
+ * SRC20 - Seismic shielded transfer (type 0x4A, AES-GCM encrypted calldata)
+ */
+export type TransferType = "ETH" | "ERC20" | "SRC20";

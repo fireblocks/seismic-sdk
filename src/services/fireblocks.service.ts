@@ -1,12 +1,7 @@
-import {
-  Fireblocks,
-  SignedMessageSignature,
-  TransactionRequest,
-  SignedMessageAlgorithmEnum,
-  VaultWalletAddress,
-} from "@fireblocks/ts-sdk";
+import { Fireblocks, SignedMessage, TransactionRequest } from "@fireblocks/ts-sdk";
 import { FireblocksSigner } from "./fireblocksSigner.js";
 import { FireblocksConfig } from "../types/index.js";
+import { SdkApiError } from "../types/errors.js";
 import {
   Logger,
   getPublicKeyForDerivationPathAndAlgorithm,
@@ -38,19 +33,6 @@ import {
  *
  * const service = new FireblocksService(config);
  *
- * // Get vault address
- * const address = await service.getVaultAccountAddress(
- *   '123',    // vault account ID
- *   'ADA',    // asset ID
- *   0         // address index
- * );
- *
- * // Get all addresses for an asset
- * const addresses = await service.getVaultAccountAddresses(
- *   '123',
- *   'BTC'
- * );
- *
  * // Get public key
  * const publicKey = await service.getAssetPublicKey(
  *   '123',    // vault account ID
@@ -78,7 +60,7 @@ export class FireblocksService {
     const { apiKey, secretKey, basePath } = getFinalFireblocksSDKParams(fireblocksConfig);
     this.fireblocksSDK = new Fireblocks({ apiKey, secretKey, basePath });
     this.testnet = fireblocksConfig?.testnet || false;
-    this.fireblocksSigner = new FireblocksSigner(this.fireblocksSDK);
+    this.fireblocksSigner = new FireblocksSigner(this.fireblocksSDK, this.testnet);
   }
 
   /**
@@ -107,208 +89,13 @@ export class FireblocksService {
     try {
       const publicKey = await getPublicKeyForDerivationPathAndAlgorithm(
         this.fireblocksSDK,
-        vaultID.toString()
+        vaultID.toString(),
+        this.testnet
       );
 
       return publicKey;
     } catch (error: unknown) {
       throw new Error(`Failed to get public key by vault ID: ${formatErrorMessage(error)}`);
-    }
-  };
-
-  /**
-   * Retrieves a specific vault account address by derivation index.
-   *
-   * This method fetches all addresses for a vault account/asset combination and
-   * returns the address at the specified BIP-44 derivation index. This is useful
-   * for managing multiple addresses within a single vault account, where each
-   * address is identified by its derivation path index.
-   *
-   * @param vaultAccountId - The Fireblocks vault account ID
-   * @param assetId - The asset/blockchain identifier (e.g., ADA, ETH, BTC)
-   * @param index - The BIP-44 address derivation index (defaults to 0 for the first address)
-   *
-   * @returns A Promise resolving to a VaultWalletAddress object containing:
-   * - address: The blockchain address string
-   * - bip44AddressIndex: The derivation index
-   * - type: Address type (permanent/one-time)
-   * - customerRefId: Optional customer reference ID
-   * - tag: Optional address tag
-   * - description: Optional address description
-   *
-   * @throws {Error} When no addresses exist for the vault account and asset
-   * @throws {Error} When no address exists at the specified index
-   * @throws {Error} When the Fireblocks API request fails
-   *
-   * @example
-   * ```typescript
-   * const service = new FireblocksService(config);
-   *
-   * // Get the first (default) address
-   * const defaultAddress = await service.getVaultAccountAddress(
-   *   '123',
-   *   'ADA'
-   * );
-   * console.log('Address:', defaultAddress.address);
-   * console.log('Index:', defaultAddress.bip44AddressIndex);
-   *
-   * // Get address at index 5
-   * const addressAt5 = await service.getVaultAccountAddress(
-   *   '123',
-   *   'ADA',
-   *   5
-   * );
-   *
-   * // Get Ethereum address
-   * const ethAddress = await service.getVaultAccountAddress(
-   *   '456',
-   *   'ETH',
-   *   0
-   * );
-   *
-   * // Handle missing address
-   * try {
-   *   const address = await service.getVaultAccountAddress(
-   *     '789',
-   *     'BTC',
-   *     10
-   *   );
-   * } catch (error) {
-   *   console.error('Address not found at index 10');
-   * }
-   * ```
-   *
-   * @remarks
-   * This method internally calls getVaultAccountAddresses() to fetch all addresses
-   * and then filters for the specific index. For performance, if you need multiple
-   * addresses, consider calling getVaultAccountAddresses() directly to avoid
-   * multiple API calls.
-   *
-   * The BIP-44 derivation path is: m/44'/coin_type'/account'/change/address_index
-   * where address_index is the value provided in the index parameter.
-   */
-  public getVaultAccountAddress = async (
-    vaultAccountId: string,
-    assetId: string,
-    index: number = 0
-  ): Promise<VaultWalletAddress> => {
-    try {
-      const addressesResponse = await this.getVaultAccountAddresses(vaultAccountId, assetId);
-      if (!addressesResponse || addressesResponse.length === 0) {
-        throw new Error(`No ${assetId} addresses found for vault account ${vaultAccountId}`);
-      }
-
-      const filteredAddresses = addressesResponse.filter(
-        (addr) => addr.bip44AddressIndex === index
-      );
-      if (filteredAddresses.length === 0) {
-        throw new Error(
-          `No ${assetId} address found for vault account ${vaultAccountId} and index ${index}`
-        );
-      }
-
-      return filteredAddresses[0];
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : "Unknown error";
-      throw new Error(
-        `Failed to get ${assetId} address for vault account ${vaultAccountId}: ${message}`
-      );
-    }
-  };
-
-  /**
-   * Retrieves all addresses associated with a vault account for a specific asset.
-   *
-   * This method fetches the complete list of addresses that have been generated for
-   * a vault account/asset combination. Each address includes metadata such as its
-   * derivation index, type, and optional tags or descriptions.
-   *
-   * @param vaultAccountId - The Fireblocks vault account ID
-   * @param assetId - The asset/blockchain identifier (e.g., ADA, ETH, BTC)
-   *
-   * @returns A Promise resolving to an array of VaultWalletAddress objects, each containing:
-   * - address: The blockchain address string
-   * - bip44AddressIndex: The BIP-44 derivation index
-   * - type: Address type (PERMANENT or ONE_TIME)
-   * - customerRefId: Optional customer reference ID
-   * - tag: Optional address tag (e.g., for XRP destination tags)
-   * - description: Optional human-readable description
-   *
-   * @throws {Error} When no addresses are found for the vault account and asset
-   * @throws {Error} When the Fireblocks API request fails
-   * @throws {Error} When the API response is missing the addresses field
-   *
-   * @example
-   * ```typescript
-   * const service = new FireblocksService(config);
-   *
-   * // Get all Cardano addresses
-   * const addresses = await service.getVaultAccountAddresses(
-   *   '123',
-   *   'ADA'
-   * );
-   *
-   * console.log(`Found ${addresses.length} addresses`);
-   * addresses.forEach(addr => {
-   *   console.log(`Index ${addr.bip44AddressIndex}: ${addr.address}`);
-   * });
-   *
-   * // Get Ethereum addresses
-   * const ethAddresses = await service.getVaultAccountAddresses(
-   *   '456',
-   *   'ETH'
-   * );
-   *
-   * // Find specific address by index
-   * const addressAt5 = ethAddresses.find(addr => addr.bip44AddressIndex === 5);
-   *
-   * // Filter permanent addresses
-   * const permanentAddresses = addresses.filter(
-   *   addr => addr.type === 'PERMANENT'
-   * );
-   *
-   * // Get addresses with custom tags
-   * const taggedAddresses = addresses.filter(addr => addr.tag);
-   * ```
-   *
-   * @remarks
-   * This method uses the paginated endpoint but currently doesn't implement pagination
-   * logic. If you have a large number of addresses, you may need to extend this method
-   * to handle pagination through multiple API calls.
-   *
-   * The addresses are returned in the order provided by Fireblocks, which is typically
-   * sorted by creation time or derivation index.
-   */
-  public getVaultAccountAddresses = async (
-    vaultAccountId: string,
-    assetId: string
-  ): Promise<VaultWalletAddress[]> => {
-    try {
-      const addressesResponse =
-        await this.fireblocksSDK.vaults.getVaultAccountAssetAddressesPaginated({
-          vaultAccountId,
-          assetId,
-        });
-
-      const addresses = addressesResponse.data.addresses;
-      if (!addresses) {
-        throw new Error(`Failed to fetch ${assetId} addresses for vault account ${vaultAccountId}`);
-      }
-      return addresses;
-    } catch (error: unknown) {
-      const message =
-        error instanceof Error
-          ? error.message
-          : error &&
-              typeof error === "object" &&
-              "message" in error &&
-              typeof error.message === "string"
-            ? error.message
-            : "Unknown error";
-
-      throw new Error(
-        `Failed to get ${assetId} address for vault account ${vaultAccountId}: ${message}`
-      );
     }
   };
 
@@ -375,12 +162,7 @@ export class FireblocksService {
    */
   public broadcastTransaction = async (
     transactionPayload: TransactionRequest
-  ): Promise<{
-    signature: SignedMessageSignature;
-    content?: string;
-    publicKey?: string;
-    algorithm?: SignedMessageAlgorithmEnum;
-  } | null> => {
+  ): Promise<SignedMessage | null> => {
     try {
       const transactionResponse = await this.fireblocksSDK.transactions.createTransaction({
         transactionRequest: transactionPayload,
@@ -526,19 +308,19 @@ export class FireblocksService {
   public signTransaction = async (
     content: string,
     vaultAccountId: string,
-    txNote?: string
-  ): Promise<SignedMessageSignature> => {
+    purpose?: string
+  ): Promise<SignedMessage> => {
     try {
-      const signature = await this.fireblocksSigner.rawSign(
+      return await this.fireblocksSigner.rawSign(
         content,
         vaultAccountId,
-        txNote || "",
-        this.testnet
+        purpose || "sign-transaction"
       );
-      return signature;
     } catch (error) {
-      console.error("Error in signTransaction:", formatErrorMessage(error));
-      throw new Error(`Failed to sign transaction: ${formatErrorMessage(error)}`);
+      if (error instanceof SdkApiError) throw error;
+      const msg = formatErrorMessage(error);
+      this.logger.error(`Failed to sign transaction: ${msg}`);
+      throw new SdkApiError(msg, 500, "SIGN_FAILED", undefined, "FireblocksService");
     }
   };
 }

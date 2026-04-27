@@ -1,189 +1,282 @@
 import { Request, Response } from "express";
 import { MainSDK } from "../../MainSDK.js";
 import { Logger } from "../../utils/index.js";
-import { SdkApiError, GetTransactionsHistoryOpts } from "../../types/index.js";
+import { SdkApiError } from "../../types/index.js";
 
-/**
- * Controller class that handles HTTP requests for Fireblocks operations.
- *
- * This controller serves as the interface between Express routes and the SdkManager,
- * handling the four core operations:
- * 1. Get vault account address
- * 2. Get vault account addresses
- * 3. Submit transaction
- * 4. Get transaction history
- *
- * @class ApiController
- * @example
- * ```typescript
- * const sdkManager = new SdkManager(config);
- * const controller = new ApiController(sdkManager);
- *
- * app.use('/api', controller.getRouter());
- * ```
- */
 export class ApiController {
   private sdk: MainSDK;
   private readonly logger = new Logger("api:controller");
 
-  /**
-   * Creates an instance of ApiController.
-   *
-   * @param sdk - The MainSDK instance to use for SDK operations
-   */
   constructor(sdk: MainSDK) {
     this.sdk = sdk;
   }
 
+  // ─── Seismic routes ──────────────────────────────────────────────────────
+
   /**
-   * Get a specific vault account address
-   *
-   * Route: `GET /vaults/:vaultAccountId/addresses/:assetId`
-   * @param req.params.vaultAccountId - The vault account ID
-   * @param req.params.assetId - The asset ID (e.g., 'BTC', 'ETH')
-   * @param req.query.index - Optional address index (defaults to 0)
+   * GET /api/:vaultId/address
+   * Returns the vault's Seismic/ETH address derived from its MPC public key.
    */
-  public getVaultAccountAddress = async (req: Request, res: Response) => {
-    const { vaultAccountId, assetId } = req.params;
-    const index = req.query.index ? parseInt(req.query.index as string) : 0;
-
+  public getAddress = async (req: Request, res: Response) => {
+    const { vaultId } = req.params;
     try {
-      this.logger.info(
-        `Getting address for vault ${vaultAccountId}, asset ${assetId}, index ${index}`
-      );
-
-      const result = await this.sdk.getVaultAccountAddress(vaultAccountId, assetId, index);
-
-      res.status(200).json({
-        success: true,
-        data: result,
-      });
-    } catch (error: unknown) {
-      this.handleError(error, res, "getVaultAccountAddress");
+      const address = await this.sdk.getSeismicAddress(vaultId);
+      res.status(200).json({ success: true, data: { vaultId, address } });
+    } catch (error) {
+      this.handleError(error, res, "getAddress");
     }
   };
 
   /**
-   * Get all vault account addresses for a specific asset
-   *
-   * Route: `GET /vaults/:vaultAccountId/addresses/:assetId/all`
+   * GET /api/:vaultId/public-key
+   * Returns the vault's compressed secp256k1 MPC public key.
    */
-  public getVaultAccountAddresses = async (req: Request, res: Response) => {
-    const { vaultAccountId, assetId } = req.params;
-
+  public getPublicKey = async (req: Request, res: Response) => {
+    const { vaultId } = req.params;
     try {
-      this.logger.info(`Getting all addresses for vault ${vaultAccountId}, asset ${assetId}`);
-
-      const result = await this.sdk.getVaultAccountAddresses(vaultAccountId, assetId);
-
-      res.status(200).json({
-        success: true,
-        data: result,
-      });
-    } catch (error: unknown) {
-      this.handleError(error, res, "getVaultAccountAddresses");
+      const publicKey = await this.sdk.getVaultPublicKey(vaultId);
+      res.status(200).json({ success: true, data: { vaultId, publicKey } });
+    } catch (error) {
+      this.handleError(error, res, "getPublicKey");
     }
   };
 
   /**
-   * Submit a transaction through Fireblocks
-   *
-   * Route: `POST /vaults/:vaultAccountId/transactions`
-   * @param req.body.transactionRequest - The Fireblocks transaction request
-   * @param req.body.waitForCompletion - Optional, whether to wait for completion (default: true)
+   * GET /api/:vaultId/native-balance
+   * Returns the vault's native ETH balance on Seismic.
    */
-  public submitTransaction = async (req: Request, res: Response) => {
-    const { vaultAccountId } = req.params;
-    const { transactionRequest, waitForCompletion = true } = req.body;
-
+  public getNativeBalance = async (req: Request, res: Response) => {
+    const { vaultId } = req.params;
     try {
-      this.logger.info(
-        `Submitting transaction for vault ${vaultAccountId}, operation: ${transactionRequest.operation}`
-      );
-
-      const result = await this.sdk.submitTransaction(
-        vaultAccountId,
-        transactionRequest,
-        waitForCompletion
-      );
-
-      res.status(200).json({
-        success: true,
-        data: result,
-      });
-    } catch (error: unknown) {
-      this.handleError(error, res, "submitTransaction");
+      const result = await this.sdk.getNativeBalance(vaultId);
+      res.status(200).json(result);
+    } catch (error) {
+      this.handleError(error, res, "getNativeBalance");
     }
   };
 
   /**
-   * Get transaction history
-   *
-   * Route: `GET /vaults/:vaultAccountId/transactions`
-   * @param req.query.assetId - Optional asset ID filter
-   * @param req.query.limit - Optional limit on results
-   * @param req.query.offset - Optional offset for pagination
-   * @param req.query.status - Optional status filter
-   * @param req.query.startDate - Optional start date (ISO 8601)
-   * @param req.query.endDate - Optional end date (ISO 8601)
+   * GET /api/:vaultId/token-balances?type=erc20|src20|all&contracts=0x...
+   * Returns ERC-20 and/or SRC-20 token balances. Contracts are optional - omitting
+   * them triggers auto-discovery. When type=all, each type fails independently:
+   * the response is always 200 with whatever succeeded, plus error fields for what failed.
    */
-  public getTransactionsHistory = async (req: Request, res: Response) => {
-    const { vaultAccountId } = req.params;
-    const { assetId, limit, offset, status, startDate, endDate } =
-      req.query as unknown as GetTransactionsHistoryOpts;
-
+  public getTokenBalances = async (req: Request, res: Response) => {
+    const { vaultId } = req.params;
+    const { type, contracts: rawContracts } = req.query as {
+      type?: string;
+      contracts?: string | string[];
+    };
+    const contracts = rawContracts
+      ? Array.isArray(rawContracts)
+        ? rawContracts
+        : rawContracts.split(",").map((s) => s.trim())
+      : undefined;
     try {
-      this.logger.info(`Getting transaction history for vault ${vaultAccountId}`);
+      const data = await this.sdk.getTokenBalances(
+        vaultId,
+        (type as "erc20" | "src20" | "all") ?? "all",
+        contracts
+      );
+      // Partial failures in type=all are already encoded in data.erc20Error / data.src20Error.
+      // We return 200 so callers can use whatever did succeed.
+      res.status(200).json({ success: true, data });
+    } catch (error) {
+      this.handleError(error, res, "getTokenBalances");
+    }
+  };
 
-      const params: GetTransactionsHistoryOpts = {
-        ...(assetId && { assetId }),
-        ...(limit && { limit }),
-        ...(offset !== undefined && { offset }),
-        ...(status && { status }),
-        ...(startDate && { startDate }),
-        ...(endDate && { endDate }),
+  /**
+   * GET /api/:vaultId/transactions
+   * Returns ERC-20/SRC-20 Transfer event history for the vault's Seismic address.
+   */
+  public getTransactionHistory = async (req: Request, res: Response) => {
+    const { vaultId } = req.params;
+    const { type, fromBlock, toBlock, before, after, contracts, limit, offset } =
+      req.query as Record<string, string>;
+    try {
+      const contractList = contracts
+        ? Array.isArray(contracts)
+          ? (contracts as string[])
+          : contracts.split(",").map((s) => s.trim())
+        : undefined;
+      const parsedLimit = limit !== undefined ? parseInt(limit) : 50;
+      const parsedOffset = offset !== undefined ? parseInt(offset) : 0;
+      const result = await this.sdk.getTransactionHistory({
+        vaultId,
+        type: (type as "native" | "erc20" | "src20" | "all") ?? "all",
+        fromBlock,
+        toBlock,
+        before,
+        after,
+        contracts: contractList,
+        limit: parsedLimit,
+        offset: parsedOffset,
+      });
+      res.status(200).json({
+        success: true,
+        data: result.transactions,
+        meta: {
+          source: result.source,
+          scannedFromBlock: result.fromBlock,
+          scannedToBlock: result.toBlock,
+          count: result.transactions.length,
+          total: result.total,
+          limit: parsedLimit,
+          offset: parsedOffset,
+          hasMore: parsedOffset + result.transactions.length < result.total,
+          ...(result.warning && { warning: result.warning }),
+        },
+      });
+    } catch (error) {
+      this.handleError(error, res, "getTransactionHistory");
+    }
+  };
+
+  /**
+   * GET /api/:vaultId/transactions/:txHash
+   * Returns a transaction by hash from the Seismic RPC.
+   */
+  public getTransaction = async (req: Request, res: Response) => {
+    const { txHash } = req.params;
+    try {
+      const tx = await this.sdk.getTransactionByHash(txHash);
+      if (!tx) {
+        res.status(404).json({ success: false, error: `Transaction ${txHash} not found` });
+        return;
+      }
+      res.status(200).json({ success: true, data: tx });
+    } catch (error) {
+      this.handleError(error, res, "getTransaction");
+    }
+  };
+
+  /**
+   * POST /api/:vaultId/transfer
+   * Submits an ETH, ERC-20, or SRC-20 (shielded) transfer.
+   */
+  public transfer = async (req: Request, res: Response) => {
+    const { vaultId } = req.params;
+    const { type, recipient, destinationVaultId, amount, contractAddress, decimals, note } =
+      req.body as {
+        type: "ETH" | "ERC20" | "SRC20";
+        recipient?: string;
+        destinationVaultId?: string;
+        amount: number;
+        contractAddress?: string;
+        decimals?: number;
+        note?: string;
       };
+    try {
+      const to = destinationVaultId
+        ? await this.sdk.getSeismicAddress(destinationVaultId)
+        : recipient!;
 
-      const result = await this.sdk.getTransactionsHistory(vaultAccountId, params);
-
-      res.status(200).json({
-        success: true,
-        data: result,
-      });
-    } catch (error: unknown) {
-      this.handleError(error, res, "getTransactionsHistory");
+      let result;
+      if (type === "SRC20") {
+        result = await this.sdk.createShieldedTransaction(
+          vaultId,
+          to,
+          amount,
+          contractAddress!,
+          note
+        );
+      } else if (type === "ERC20") {
+        result = await this.sdk.createErc20Transaction(
+          vaultId,
+          to,
+          amount,
+          contractAddress!,
+          decimals,
+          note
+        );
+      } else {
+        result = await this.sdk.createNativeTransaction(vaultId, to, amount, false, note);
+      }
+      res.status(200).json(result);
+    } catch (error) {
+      this.handleError(error, res, "transfer");
     }
   };
 
   /**
-   * Handles errors that occur during API operations.
-   *
-   * This private method provides centralized error handling, distinguishing between
-   * SdkApiError instances (which have structured error information) and generic
-   * errors. It logs the error details and sends an appropriate HTTP response.
-   *
-   * @param error - The error that occurred
-   * @param res - Express response object
-   * @param endpoint - The name of the endpoint where the error occurred (for logging)
-   * @returns void
-   *
-   * @remarks
-   * For SdkApiError instances, returns a structured JSON response with statusCode,
-   * errorType, service, message, and additional error info.
-   * For generic errors, returns a 500 status with a simple error message.
+   * POST /api/:vaultId/src20/register-key
+   * Registers the vault's AES viewing key in the Seismic Directory precompile.
+   * One-time operation. After registration, Transfer events are encrypted to this key.
    */
+  public registerViewingKey = async (req: Request, res: Response) => {
+    const { vaultId } = req.params;
+    try {
+      const result = await this.sdk.registerViewingKey(vaultId);
+      res.status(200).json(result);
+    } catch (error) {
+      this.handleError(error, res, "registerViewingKey");
+    }
+  };
+
+  /**
+   * GET /api/:vaultId/src20/key-status
+   * Returns whether the vault has a viewing key registered in the Seismic Directory.
+   */
+  public checkViewingKeyStatus = async (req: Request, res: Response) => {
+    const { vaultId } = req.params;
+    try {
+      const registered = await this.sdk.checkViewingKeyRegistered(vaultId);
+      res.status(200).json({ success: true, data: { vaultId, registered } });
+    } catch (error) {
+      this.handleError(error, res, "checkViewingKeyStatus");
+    }
+  };
+
+  /**
+   * GET /api/contracts/:contractAddress
+   * Returns ERC-20 metadata: name, symbol, decimals, totalSupply.
+   */
+  public getContractInfo = async (req: Request, res: Response) => {
+    const { contractAddress } = req.params;
+    try {
+      const info = await this.sdk.getErc20Info(contractAddress);
+      res.status(200).json({ success: true, data: { contractAddress, ...info } });
+    } catch (error) {
+      this.handleError(error, res, "getContractInfo");
+    }
+  };
+
+  /**
+   * POST /api/explorer/validate-key
+   * Validates a SocialScan Explorer API key provided in the request body.
+   */
+  public validateExplorerApiKey = async (req: Request, res: Response) => {
+    const { apiKey } = req.body as { apiKey?: string };
+    if (!apiKey) {
+      res.status(400).json({ success: false, error: "apiKey is required in request body" });
+      return;
+    }
+    try {
+      const result = await this.sdk.validateExplorerApiKey(apiKey);
+      const statusCodeMap: Record<string, number> = {
+        valid: 200,
+        invalid_key: 401,
+        service_error: 502,
+      };
+      const statusCode = statusCodeMap[result.status] ?? 500;
+      res.status(statusCode).json({ success: result.valid, data: result });
+    } catch (error) {
+      this.handleError(error, res, "validateExplorerApiKey");
+    }
+  };
+
+  // ─── Error handling ──────────────────────────────────────────────────────────
+
   private handleError(error: unknown, res: Response, endpoint: string): void {
     if (error instanceof SdkApiError) {
-      const statusCode = error.statusCode || 500;
-
       this.logger.error(`${endpoint} - SdkApiError:`, {
         statusCode: error.statusCode,
         errorType: error.errorType,
         service: error.service,
         message: error.message,
       });
-
-      res.status(statusCode).json({
+      res.status(error.statusCode || 500).json({
         success: false,
         error: error.message,
         statusCode: error.statusCode,
@@ -193,9 +286,6 @@ export class ApiController {
       });
     } else {
       const message = error instanceof Error ? error.message : "Unknown error";
-
-      // Check if this is a client error from Fireblocks SDK
-      // These indicate invalid input that passed Zod validation but was rejected by Fireblocks
       const isClientError =
         message.includes("is not supported by Fireblocks") ||
         message.includes("Invalid request") ||
@@ -203,19 +293,13 @@ export class ApiController {
         message.includes("Validation failed") ||
         message.includes("Invalid") ||
         message.includes("required");
-
       const statusCode = isClientError ? 400 : 500;
-
       if (isClientError) {
         this.logger.warn(`${endpoint} - Client Error:`, message);
       } else {
         this.logger.error(`${endpoint} - Server Error:`, message);
       }
-
-      res.status(statusCode).json({
-        success: false,
-        error: error instanceof Error ? error.message : "Internal server error",
-      });
+      res.status(statusCode).json({ success: false, error: message });
     }
   }
 }
