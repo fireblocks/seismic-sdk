@@ -162,7 +162,7 @@ export class ApiController {
         type: "ETH" | "ERC20" | "SRC20";
         recipient?: string;
         destinationVaultId?: string;
-        amount: number;
+        amount: string;
         contractAddress?: string;
         decimals?: number;
         note?: string;
@@ -299,7 +299,10 @@ export class ApiController {
       } else {
         this.logger.error(`${endpoint} - Server Error:`, message);
       }
-      res.status(statusCode).json({ success: false, error: message });
+      res.status(statusCode).json({
+        success: false,
+        error: isClientError ? message : "Internal server error",
+      });
     }
   }
 }
