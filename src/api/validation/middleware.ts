@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from "express";
-import { ZodError, ZodObject, ZodRawShape } from "zod";
+import { ZodError } from "zod";
 
 import { Logger, LogLevel } from "../../utils/logger.js";
 
@@ -11,9 +11,9 @@ const logger = new Logger("app:server-initializer");
  * Configuration for validation middleware
  */
 interface ValidationConfig {
-  params?: ZodObject<ZodRawShape>;
-  query?: ZodObject<ZodRawShape>;
-  body?: ZodObject<ZodRawShape>;
+  params?: { parseAsync: (data: unknown) => Promise<Record<string, string>> };
+  query?: { parseAsync: (data: unknown) => Promise<Record<string, unknown>> };
+  body?: { parseAsync: (data: unknown) => Promise<Record<string, unknown>> };
 }
 
 /**
@@ -44,7 +44,7 @@ export const validate = (config: ValidationConfig) => {
       }
       if (config.query) {
         const validatedQuery = await config.query.parseAsync(req.query);
-        req.query = { ...validatedQuery } as Record<string, string>;
+        (req.query as unknown) = { ...validatedQuery };
       }
       if (config.body) {
         req.body = await config.body.parseAsync(req.body);
