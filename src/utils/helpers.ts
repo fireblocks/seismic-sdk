@@ -2,6 +2,7 @@
 
 import fs, { readFileSync } from "fs";
 import { BasePath } from "@fireblocks/ts-sdk";
+import { isAddress } from "viem";
 import {
   FireblocksConfig,
   GetFtBalancesResponse,
@@ -10,7 +11,12 @@ import {
   TransactionType,
 } from "../types/index.js";
 import { config, chain_info } from "./index.js";
-import { MainSDK } from "../MainSDK.js";
+
+interface BalanceChecker {
+  getBlockchainApiService(): { estimateTxFee(): Promise<number> };
+  getFtBalances(vaultId: string): Promise<GetFtBalancesResponse>;
+  getNativeBalance(vaultId: string): Promise<GetNativeBalanceResponse>;
+}
 
 // Returns credentials for Fireblocks SDK initialization
 export const getFinalFireblocksSDKParams = (
@@ -20,7 +26,7 @@ export const getFinalFireblocksSDKParams = (
   secretKey: string;
   basePath: string;
 } => {
-  var privateKey: string;
+  let privateKey: string;
   if (fireblocksConfig && fireblocksConfig.apiSecret) {
     privateKey =
       fireblocksConfig.apiSecret.endsWith(".pem") || fireblocksConfig.apiSecret.endsWith(".key")
@@ -56,10 +62,10 @@ export const getFinalFireblocksSDKParams = (
  * @throws {Error} If parameter validation fails.
  */
 export const checkParamsAndAdjustAmount = async (
-  sdk: MainSDK,
+  sdk: BalanceChecker,
   vaultAccountId: string,
   recipientAddress: string,
-  amount: number,
+  amount: string,
   grossTransaction: boolean | undefined,
   type: TransactionType,
   token?: TokenType
@@ -90,8 +96,9 @@ export const checkParamsAndAdjustAmount = async (
       };
     }
 
+    let numAmount = typeof amount === "string" ? parseFloat(amount) : amount;
     let smallestUnitAmount =
-      type == TransactionType.FungibleToken ? ftToUnits(amount, token!) : coinToUnits(amount);
+      type == TransactionType.FungibleToken ? ftToUnits(numAmount, token!) : coinToUnits(numAmount);
 
     let fee = 0;
 
@@ -110,9 +117,8 @@ export const checkParamsAndAdjustAmount = async (
 
     // if its a gross STX transfer, deduct fee from transferred amount
     if (type == TransactionType.Native && grossTransaction) {
-      console.log(`Gross transaction: deducting fee from transferred amount`);
-      amount -= fee;
-      if (amount <= 0) {
+      numAmount -= fee;
+      if (numAmount <= 0) {
         return {
           validParams: false,
           reason: `Amount after fee deduction is zero or negative`,
@@ -130,20 +136,23 @@ export const checkParamsAndAdjustAmount = async (
       balance = (balanceResponse as GetNativeBalanceResponse).balance;
     }
 
-    if (amount + fee > balance!) {
+    if (balance === undefined) {
       return {
         validParams: false,
-        reason: `Insufficient funds. Available balance: ${balance}, required: ${amount}`,
+        reason: `Balance not found for the requested token or account`,
+      };
+    }
+
+    if (numAmount + fee > balance) {
+      return {
+        validParams: false,
+        reason: `Insufficient funds. Available balance: ${balance}, required: ${numAmount}`,
       };
     }
 
     // Recalculate microAmount after any adjustments
     smallestUnitAmount =
-      type == TransactionType.FungibleToken ? ftToUnits(amount, token!) : coinToUnits(amount);
-
-    console.log(
-      `Converted amount to micro: ${smallestUnitAmount} (from ${amount} ${token ? token : "STX"})`
-    );
+      type == TransactionType.FungibleToken ? ftToUnits(numAmount, token!) : coinToUnits(numAmount);
 
     return {
       validParams: true,
@@ -186,9 +195,7 @@ export const validateAmount = (amount: string | number): boolean => {
 // Use this function to verify if an address is valid for the blockchain
 export const validateAddress = (address: string): boolean => {
   if (!address) return false;
-
-  // Implement blockchain-specific address validation logic here
-  return true; // Placeholder
+  return isAddress(address);
 };
 
 // Converts ETH (human-readable) to wei (10^18 smallest units)
@@ -203,15 +210,13 @@ export const unitsToCoin = (units: bigint | number | string): number => {
 };
 
 // Use this function to convert fungible token amount to smallest units for that token
-export const ftToUnits = (_amount: number | string, _token: TokenType): bigint => {
-  // implement conversion logic here
-  return BigInt(0); // Placeholder
-};
-
-// Use this function to convert fungible token amount in smallest units to human readable amount
-export const unitsToFt = (_units: bigint | number | string, _token: TokenType): number => {
-  // implement conversion logic here
-  return 0; // Placeholder
+export const ftToUnits = (
+  amount: number | string,
+  _token: TokenType,
+  decimals: number = 18
+): bigint => {
+  const n = typeof amount === "string" ? parseFloat(amount) : amount;
+  return BigInt(Math.round(n * 10 ** decimals));
 };
 
 const safeStringify = (obj: unknown): string => {
