@@ -137,7 +137,7 @@ export class BlockchainApiService {
     return { blockHex: `0x${blockNum.toString(16)}`, outOfRange };
   }
 
-  private async jsonRpc<T>(method: string, params: unknown[]): Promise<T> {
+  public async jsonRpc<T>(method: string, params: unknown[]): Promise<T> {
     const response = await this.axiosClient.post(this.rpcUrl, {
       jsonrpc: "2.0",
       id: 1,
@@ -294,7 +294,9 @@ export class BlockchainApiService {
    *
    * @param apiKey - The SocialScan API key to validate
    */
-  public validateExplorerApiKey = async (apiKey: string): Promise<{
+  public validateExplorerApiKey = async (
+    apiKey: string
+  ): Promise<{
     valid: boolean;
     status: "valid" | "invalid_key" | "service_error";
     error?: string;
@@ -334,14 +336,44 @@ export class BlockchainApiService {
   // ─── Fees ───────────────────────────────────────────────────────────────────
 
   /**
+   * Estimates gas required for a transaction with a safety margin.
+   * Falls back to 100_000 if estimation fails.
+   */
+  private estimateGas = async (
+    from: string,
+    to: string,
+    value?: string,
+    data?: string
+  ): Promise<bigint> => {
+    try {
+      const estimateParams = {
+        from,
+        to,
+        ...(value && { value }),
+        ...(data && { data }),
+      };
+      const hexEstimate = await this.jsonRpc<string>("eth_estimateGas", [estimateParams]);
+      const estimated = BigInt(hexEstimate);
+      // Apply 20% safety margin
+      return (estimated * 120n) / 100n;
+    } catch {
+      // Fallback to conservative estimate on error
+      return 100_000n;
+    }
+  };
+
+  /**
    * Estimates the transaction fee for a standard ETH transfer.
-   * Uses eth_gasPrice and eth_estimateGas; falls back to 50_000 if estimation fails.
+   * Uses eth_estimateGas with fallback to 100_000.
    */
   public estimateTxFee = async (): Promise<number> => {
     try {
       const hexGasPrice = await this.jsonRpc<string>("eth_gasPrice", []);
       const gasPriceWei = BigInt(hexGasPrice);
-      const gasLimit = 100_000n;
+      const gasLimit = await this.estimateGas(
+        "0x0000000000000000000000000000000000000000",
+        "0x0000000000000000000000000000000000000000"
+      ).catch(() => 100_000n);
       const feeWei = gasPriceWei * gasLimit;
       return Number(feeWei) / 10 ** chain_info.coinDecimals;
     } catch (error) {
@@ -381,14 +413,14 @@ export class BlockchainApiService {
 
       const valueWei = BigInt(Math.round(amount * 10 ** chain_info.coinDecimals));
 
-      const [hexNonce, hexGasPrice] = await Promise.all([
+      const [hexNonce, hexGasPrice, gasLimit] = await Promise.all([
         this.jsonRpc<string>("eth_getTransactionCount", [sender, "latest"]),
         this.jsonRpc<string>("eth_gasPrice", []),
+        this.estimateGas(sender, recipient, `0x${valueWei.toString(16)}`).catch(() => 100_000n),
       ]);
 
       const nonce = parseInt(hexNonce, 16);
       const gasPrice = BigInt(hexGasPrice);
-      const gasLimit = 100_000n;
 
       const evmTxFields = {
         from: sender,
@@ -550,7 +582,7 @@ export class BlockchainApiService {
 
       if (type === "all") {
         // Native + ERC-20 come from SocialScan (no fromBlock/toBlock here). SRC-20 uses
-        // eth_getLogs: do not pass a pinned full-chain range — "0x0".."latest" exceeds the
+        // eth_getLogs: do not pass a pinned full-chain range - "0x0".."latest" exceeds the
         // node's max log window (~100k blocks) and rejects. Omit hex bounds so SRC-20 uses
         // scanLogsUntil; keep before/after for date filters.
         const src20Params = {
@@ -619,7 +651,7 @@ export class BlockchainApiService {
       throw this.errorHandler.handleApiError(
         new Error(
           "Native ETH transaction history requires the SocialScan Explorer API (no RPC fallback). " +
-          "Set SOCIALSCAN_API_KEY in your environment (get a key at developer.socialscan.io)."
+            "Set SOCIALSCAN_API_KEY in your environment (get a key at developer.socialscan.io)."
         ),
         "fetching transaction history"
       );
