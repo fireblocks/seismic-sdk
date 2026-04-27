@@ -40,11 +40,11 @@ export const validate = (config: ValidationConfig) => {
       // Validate each part of the request independently
       if (config.params) {
         const validatedParams = await config.params.parseAsync(req.params);
-        Object.assign(req.params, validatedParams);
+        req.params = { ...validatedParams } as Record<string, string>;
       }
       if (config.query) {
         const validatedQuery = await config.query.parseAsync(req.query);
-        Object.assign(req.query, validatedQuery);
+        req.query = { ...validatedQuery } as Record<string, string>;
       }
       if (config.body) {
         req.body = await config.body.parseAsync(req.body);
@@ -61,7 +61,7 @@ export const validate = (config: ValidationConfig) => {
         }));
 
         // Respond with 400 Bad Request and validation error details
-        
+
         logger.warn("Validation error", { errors: formattedErrors });
 
         res.status(400).json({
