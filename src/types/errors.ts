@@ -16,3 +16,10 @@ export class SdkApiError extends Error {
     this.name = "SdkApiError"; // Configure the error name accordingly to your needs
   }
 }
+
+export class RateLimitError extends SdkApiError {
+  constructor(message: string, public retryAfterMs?: number) {
+    super(message, 429, "RATE_LIMITED");
+    this.name = "RateLimitError";
+  }
+}
