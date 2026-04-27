@@ -4,8 +4,6 @@ import {
   TransferPeerPathType,
   TransactionRequest,
   TransactionResponse,
-  FireblocksResponse,
-  TransactionStateEnum,
   SignedMessageAlgorithmEnum,
   SignedMessage,
 } from "@fireblocks/ts-sdk";
@@ -14,6 +12,8 @@ import {
   derivationPath,
   formatErrorMessage,
   FIREBLOCKS_RAW_SIGN_ASSET_ID,
+  withRetry,
+  getTxStatus,
 } from "../utils/index.js";
 import { Logger } from "../utils/logger.js";
 import { SdkApiError } from "../types/errors.js";
@@ -92,30 +92,7 @@ export class FireblocksSigner {
   };
 
   getTxStatus = async (txId: string): Promise<TransactionResponse> => {
-    let response: FireblocksResponse<TransactionResponse> =
-      await this.fireblocks.transactions.getTransaction({ txId });
-    let tx: TransactionResponse = response.data;
-
-    this.logger.debug(`tx:${txId} status=${tx.status}`);
-
-    while (tx.status !== TransactionStateEnum.Completed) {
-      await new Promise((resolve) => setTimeout(resolve, 3000));
-
-      response = await this.fireblocks.transactions.getTransaction({ txId });
-      tx = response.data;
-
-      switch (tx.status) {
-        case TransactionStateEnum.Blocked:
-        case TransactionStateEnum.Cancelled:
-        case TransactionStateEnum.Failed:
-        case TransactionStateEnum.Rejected:
-          throw new Error(`RAW signing failed | txId:${tx.id} | status:${tx.status}`);
-        default:
-          this.logger.debug(`tx:${txId} status=${tx.status}`);
-          break;
-      }
-    }
-    return tx;
+    return getTxStatus(txId, this.fireblocks, 3000);
   };
 
   /**
@@ -158,9 +135,14 @@ export class FireblocksSigner {
 
       this.logger.info(`Submitting RAW sign | vault:${vaultAccountId} | purpose:${purpose}`);
 
-      const transactionResponse = await this.fireblocks.transactions.createTransaction({
-        transactionRequest: transactionPayload,
-      });
+      const transactionResponse = await withRetry(
+        () =>
+          this.fireblocks.transactions.createTransaction({
+            transactionRequest: transactionPayload,
+          }),
+        3,
+        1000
+      );
 
       const txId = transactionResponse.data.id;
       if (!txId) {
