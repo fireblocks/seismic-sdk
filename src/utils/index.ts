@@ -2,7 +2,6 @@ export * from "./config.js";
 export * from "./constants.js";
 export * from "./errorHandler.js";
 export * from "./fireblocks.js";
-export * from "./fireblocks.js";
 export * from "./general.js";
 export * from "./helpers.js";
 export * from "./httpClient.js";
