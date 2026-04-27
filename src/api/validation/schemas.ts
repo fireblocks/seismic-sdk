@@ -127,7 +127,7 @@ export const submitTransactionBody = z.object({
     .object({
       operation: z.string().min(1, "operation is required"),
     })
-    .loose(),
+    .strict(),
   waitForCompletion: z.boolean().optional().default(true),
 });
 
