@@ -5,8 +5,6 @@ import { getPackageName } from "./index.js";
 import { Config, CustomConfig } from "../types/index.js";
 import { Logger } from "./logger.js";
 
-dotenv.config();
-
 const logger = new Logger("utils:config");
 
 let configCache: Config | null = null;
@@ -37,6 +35,8 @@ const validateBasePath = (basePath: string): BasePath => {
 };
 
 const loadConfigFromEnv = (): Config => {
+  dotenv.config();
+
   return {
     PORT: Number(process.env.PORT) || 8000,
     FIREBLOCKS: {
