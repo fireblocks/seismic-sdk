@@ -549,6 +549,10 @@ export class BlockchainApiService {
       }
 
       if (type === "all") {
+        // Native + ERC-20 come from SocialScan (no fromBlock/toBlock here). SRC-20 uses
+        // eth_getLogs: do not pass a pinned full-chain range — "0x0".."latest" exceeds the
+        // node's max log window (~100k blocks) and rejects. Omit hex bounds so SRC-20 uses
+        // scanLogsUntil; keep before/after for date filters.
         const src20Params = {
           address,
           type: "src20" as const,
@@ -557,8 +561,6 @@ export class BlockchainApiService {
           offset,
           encryptionSk,
           viewingKey,
-          fromBlock,
-          toBlock,
           before,
           after,
         };
@@ -617,7 +619,7 @@ export class BlockchainApiService {
       throw this.errorHandler.handleApiError(
         new Error(
           "Native ETH transaction history requires the SocialScan Explorer API (no RPC fallback). " +
-            "Set SOCIALSCAN_API_KEY in your environment (get a key at developer.socialscan.io)."
+          "Set SOCIALSCAN_API_KEY in your environment (get a key at developer.socialscan.io)."
         ),
         "fetching transaction history"
       );
