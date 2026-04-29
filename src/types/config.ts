@@ -5,6 +5,8 @@ export interface Config {
   FIREBLOCKS: FireblocksSDKConfig;
   APP_NAME: string;
   TESTNET: boolean;
+  RPC_URL?: string;
+  SOCIALSCAN_API_KEY?: string;
 }
 
 export interface CustomConfig {
@@ -12,6 +14,8 @@ export interface CustomConfig {
   FIREBLOCKS?: Partial<FireblocksSDKConfig>;
   APP_NAME?: string;
   TESTNET?: boolean;
+  RPC_URL?: string;
+  SOCIALSCAN_API_KEY?: string;
 }
 
 export { BasePath };

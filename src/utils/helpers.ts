@@ -3,19 +3,13 @@
 import { readFileSync } from "fs";
 import { BasePath } from "@fireblocks/ts-sdk";
 import { isAddress, parseUnits } from "viem";
-import {
-  FireblocksConfig,
-  GetFtBalancesResponse,
-  GetNativeBalanceResponse,
-  TokenType,
-  TransactionType,
-} from "../types/index.js";
+import { FireblocksConfig, TokenType, TransactionType } from "../types/index.js";
 import { config, chain_info } from "./index.js";
 
 interface BalanceChecker {
   getBlockchainApiService(): { estimateTxFee(): Promise<number> };
-  getFtBalances(vaultId: string): Promise<GetFtBalancesResponse>;
-  getNativeBalance(vaultId: string): Promise<GetNativeBalanceResponse>;
+  getFtBalances(vaultId: string): Promise<{ token: TokenType; balance: number }[]>;
+  getNativeBalance(vaultId: string): Promise<number>;
 }
 
 // Returns credentials for Fireblocks SDK initialization
@@ -105,15 +99,6 @@ export const checkParamsAndAdjustAmount = async (
       fee = await sdk.getBlockchainApiService().estimateTxFee();
     }
 
-    const balanceResponse =
-      type == TransactionType.FungibleToken
-        ? await sdk.getFtBalances(vaultAccountId)
-        : await sdk.getNativeBalance(vaultAccountId);
-
-    if (!balanceResponse.success) {
-      throw new Error(`Could not fetch account balance to check funds sufficiency`);
-    }
-
     // if its a gross STX transfer, deduct fee from transferred amount
     if (type == TransactionType.Native && grossTransaction) {
       numAmount -= fee;
@@ -125,14 +110,12 @@ export const checkParamsAndAdjustAmount = async (
       }
     }
 
-    let balance;
-    // to do : check amount against balance
+    let balance: number | undefined;
     if (type == TransactionType.FungibleToken) {
-      balance = (balanceResponse as GetFtBalancesResponse).data?.find(
-        (b) => b.token === token
-      )?.balance;
+      const balances = await sdk.getFtBalances(vaultAccountId);
+      balance = balances.find((b) => b.token === token)?.balance;
     } else {
-      balance = (balanceResponse as GetNativeBalanceResponse).balance;
+      balance = await sdk.getNativeBalance(vaultAccountId);
     }
 
     if (balance === undefined) {

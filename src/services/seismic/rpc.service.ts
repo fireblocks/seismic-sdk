@@ -2,6 +2,7 @@ import { AxiosInstance } from "axios";
 import { secp256k1 } from "@noble/curves/secp256k1";
 import { keccak256 } from "viem";
 import { Logger, ErrorHandler, api_constants, withRetry } from "../../utils/index.js";
+import { SdkApiError } from "../../types/index.js";
 import { SEISMIC_CHAIN_ID } from "../../utils/constants.js";
 import { createHttpClient } from "../../utils/httpClient.js";
 
@@ -56,7 +57,13 @@ export class RpcService {
         params,
       });
       if (response.data.error) {
-        throw new Error(`JSON-RPC error: ${JSON.stringify(response.data.error)}`);
+        throw new SdkApiError(
+          `JSON-RPC error: ${JSON.stringify(response.data.error)}`,
+          502,
+          "JSON_RPC_ERROR",
+          response.data.error,
+          "RpcService"
+        );
       }
       return response.data.result as T;
     });
@@ -102,7 +109,9 @@ export class RpcService {
       const compressed = pubKey.startsWith("0x") ? pubKey.slice(2) : pubKey;
       if (compressed.length !== 66) {
         throw this.errorHandler.handleApiError(
-          new Error(`Invalid compressed public key length: ${compressed.length} chars (expected 66)`),
+          new Error(
+            `Invalid compressed public key length: ${compressed.length} chars (expected 66)`
+          ),
           "formatting address"
         );
       }

@@ -48,8 +48,8 @@ export class ApiController {
   public getNativeBalance = async (req: Request, res: Response) => {
     const { vaultId } = req.params;
     try {
-      const result = await this.sdk.getNativeBalance(vaultId);
-      res.status(200).json(result);
+      const balance = await this.sdk.getNativeBalance(vaultId);
+      res.status(200).json({ success: true, balance });
     } catch (error) {
       this.handleError(error, res, "getNativeBalance");
     }
@@ -113,22 +113,20 @@ export class ApiController {
         limit: parsedLimit,
         offset: parsedOffset,
       });
-      if (!result.success) {
-        res.status(400).json({ success: false, error: result.error });
-        return;
-      }
+      const transactions = result.transactions;
+      const total = result.total;
       res.status(200).json({
         success: true,
-        data: result.transactions,
+        data: transactions,
         meta: {
           source: result.source,
           scannedFromBlock: result.fromBlock,
           scannedToBlock: result.toBlock,
-          count: result.transactions!.length,
-          total: result.total,
+          count: transactions.length,
+          total,
           limit: parsedLimit,
           offset: parsedOffset,
-          hasMore: parsedOffset + result.transactions!.length < result.total!,
+          hasMore: parsedOffset + transactions.length < total,
           ...(result.warning && { warning: result.warning }),
         },
       });
@@ -143,16 +141,16 @@ export class ApiController {
    */
   public getTransaction = async (req: Request, res: Response) => {
     const { txHash } = req.params;
-    const result = await this.sdk.getTransactionByHash(txHash);
-    if (!result.success) {
-      res.status(500).json({ success: false, error: result.error });
-      return;
+    try {
+      const data = await this.sdk.getTransactionByHash(txHash);
+      if (!data) {
+        res.status(404).json({ success: false, error: `Transaction ${txHash} not found` });
+        return;
+      }
+      res.status(200).json({ success: true, data });
+    } catch (error) {
+      this.handleError(error, res, "getTransaction");
     }
-    if (!result.data) {
-      res.status(404).json({ success: false, error: `Transaction ${txHash} not found` });
-      return;
-    }
-    res.status(200).json({ success: true, data: result.data });
   };
 
   /**
@@ -171,10 +169,28 @@ export class ApiController {
         decimals?: number;
         note?: string;
       };
+
+    // Validate required parameters
+    if (!destinationVaultId && !recipient) {
+      res.status(400).json({
+        success: false,
+        error: "Either recipient or destinationVaultId must be provided",
+      });
+      return;
+    }
+
+    if ((type === "ERC20" || type === "SRC20") && !contractAddress) {
+      res.status(400).json({
+        success: false,
+        error: `contractAddress is required for ${type} transfers`,
+      });
+      return;
+    }
+
     try {
       const to = destinationVaultId
         ? await this.sdk.getSeismicAddress(destinationVaultId)
-        : recipient!;
+        : (recipient as string);
 
       let result;
       if (type === "SRC20") {
@@ -182,7 +198,7 @@ export class ApiController {
           vaultId,
           to,
           amount,
-          contractAddress!,
+          contractAddress as string,
           note
         );
       } else if (type === "ERC20") {
@@ -190,14 +206,14 @@ export class ApiController {
           vaultId,
           to,
           amount,
-          contractAddress!,
+          contractAddress as string,
           decimals,
           note
         );
       } else {
         result = await this.sdk.createNativeTransaction(vaultId, to, amount, false, note);
       }
-      res.status(200).json(result);
+      res.status(200).json({ success: true, txHash: result.txHash });
     } catch (error) {
       this.handleError(error, res, "transfer");
     }
@@ -212,7 +228,7 @@ export class ApiController {
     const { vaultId } = req.params;
     try {
       const result = await this.sdk.registerViewingKey(vaultId);
-      res.status(200).json(result);
+      res.status(200).json({ success: true, txHash: result.txHash });
     } catch (error) {
       this.handleError(error, res, "registerViewingKey");
     }
@@ -238,12 +254,12 @@ export class ApiController {
    */
   public getContractInfo = async (req: Request, res: Response) => {
     const { contractAddress } = req.params;
-    const result = await this.sdk.getErc20Info(contractAddress);
-    if (!result.success) {
-      res.status(500).json({ success: false, error: result.error });
-      return;
+    try {
+      const data = await this.sdk.getErc20Info(contractAddress);
+      res.status(200).json({ success: true, data: { contractAddress, ...data } });
+    } catch (error) {
+      this.handleError(error, res, "getContractInfo");
     }
-    res.status(200).json({ success: true, data: { contractAddress, ...result.data } });
   };
 
   /**
