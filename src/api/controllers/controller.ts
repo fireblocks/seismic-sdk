@@ -113,6 +113,10 @@ export class ApiController {
         limit: parsedLimit,
         offset: parsedOffset,
       });
+      if (!result.success) {
+        res.status(400).json({ success: false, error: result.error });
+        return;
+      }
       res.status(200).json({
         success: true,
         data: result.transactions,
@@ -120,11 +124,11 @@ export class ApiController {
           source: result.source,
           scannedFromBlock: result.fromBlock,
           scannedToBlock: result.toBlock,
-          count: result.transactions.length,
+          count: result.transactions!.length,
           total: result.total,
           limit: parsedLimit,
           offset: parsedOffset,
-          hasMore: parsedOffset + result.transactions.length < result.total,
+          hasMore: parsedOffset + result.transactions!.length < result.total!,
           ...(result.warning && { warning: result.warning }),
         },
       });
@@ -139,16 +143,16 @@ export class ApiController {
    */
   public getTransaction = async (req: Request, res: Response) => {
     const { txHash } = req.params;
-    try {
-      const tx = await this.sdk.getTransactionByHash(txHash);
-      if (!tx) {
-        res.status(404).json({ success: false, error: `Transaction ${txHash} not found` });
-        return;
-      }
-      res.status(200).json({ success: true, data: tx });
-    } catch (error) {
-      this.handleError(error, res, "getTransaction");
+    const result = await this.sdk.getTransactionByHash(txHash);
+    if (!result.success) {
+      res.status(500).json({ success: false, error: result.error });
+      return;
     }
+    if (!result.data) {
+      res.status(404).json({ success: false, error: `Transaction ${txHash} not found` });
+      return;
+    }
+    res.status(200).json({ success: true, data: result.data });
   };
 
   /**
@@ -234,12 +238,12 @@ export class ApiController {
    */
   public getContractInfo = async (req: Request, res: Response) => {
     const { contractAddress } = req.params;
-    try {
-      const info = await this.sdk.getErc20Info(contractAddress);
-      res.status(200).json({ success: true, data: { contractAddress, ...info } });
-    } catch (error) {
-      this.handleError(error, res, "getContractInfo");
+    const result = await this.sdk.getErc20Info(contractAddress);
+    if (!result.success) {
+      res.status(500).json({ success: false, error: result.error });
+      return;
     }
+    res.status(200).json({ success: true, data: { contractAddress, ...result.data } });
   };
 
   /**
