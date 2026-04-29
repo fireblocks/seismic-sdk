@@ -13,13 +13,20 @@ export class Logger {
   private static sanitizeLogs: boolean = true;
   private static customSensitiveKeys: string[] = [];
   private context: string;
+  private instanceLevel?: LogLevel;
 
   /**
    * Create a new logger instance
    * @param context The context for this logger (e.g. class name)
+   * @param level Optional per-instance log level override; falls back to the global static level
    */
-  constructor(context: string) {
+  constructor(context: string, level?: LogLevel) {
     this.context = context;
+    this.instanceLevel = level;
+  }
+
+  private get effectiveLevel(): LogLevel {
+    return this.instanceLevel ?? Logger.level;
   }
 
   /**
@@ -92,7 +99,7 @@ export class Logger {
    * @param args Additional arguments
    */
   debug(message: string, ...args: unknown[]): void {
-    if (Logger.level <= LogLevel.DEBUG) {
+    if (this.effectiveLevel <= LogLevel.DEBUG) {
       const sanitizedArgs = this.sanitizeArgs(args);
       console.log(
         `[${this.getTimestamp()}] [DEBUG] [${this.context}] ${message}`,
@@ -107,7 +114,7 @@ export class Logger {
    * @param args Additional arguments
    */
   info(message: string, ...args: unknown[]): void {
-    if (Logger.level <= LogLevel.INFO) {
+    if (this.effectiveLevel <= LogLevel.INFO) {
       const sanitizedArgs = this.sanitizeArgs(args);
       console.log(`[${this.getTimestamp()}] [INFO] [${this.context}] ${message}`, ...sanitizedArgs);
     }
@@ -119,7 +126,7 @@ export class Logger {
    * @param args Additional arguments
    */
   warn(message: string, ...args: unknown[]): void {
-    if (Logger.level <= LogLevel.WARN) {
+    if (this.effectiveLevel <= LogLevel.WARN) {
       const sanitizedArgs = this.sanitizeArgs(args);
       console.warn(
         `[${this.getTimestamp()}] [WARN] [${this.context}] ${message}`,
@@ -134,7 +141,7 @@ export class Logger {
    * @param args Additional arguments
    */
   error(message: string, ...args: unknown[]): void {
-    if (Logger.level <= LogLevel.ERROR) {
+    if (this.effectiveLevel <= LogLevel.ERROR) {
       const sanitizedArgs = this.sanitizeArgs(args);
       console.error(
         `[${this.getTimestamp()}] [ERROR] [${this.context}] ${message}`,
@@ -149,7 +156,7 @@ export class Logger {
    * @returns Child logger instance
    */
   createChild(subContext: string): Logger {
-    return new Logger(`${this.context}:${subContext}`);
+    return new Logger(`${this.context}:${subContext}`, this.instanceLevel);
   }
 }
 
