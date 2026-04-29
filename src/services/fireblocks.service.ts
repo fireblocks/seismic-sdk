@@ -331,7 +331,6 @@ export class FireblocksService {
    * Signs a transaction with the given vault account ID using the Fireblocks SDK and Fireblocks-signer.
    *
    * This method prepares and sends a transaction from the specified sender to the recipient
-   * // descripe parameters
    * @param content - The content of the transaction to sign.
    * @param vaultAccountId - The Fireblocks vault account ID as a string or number.
    * @param txNote - An optional note for the transaction.
