@@ -2,14 +2,11 @@ import { fileURLToPath } from "url";
 import path, { dirname } from "path";
 import { BasePath } from "@fireblocks/ts-sdk";
 import express, { Request, Response } from "express";
-import dotenv from "dotenv";
 
-import { config, Logger, getSwaggerSpec, swaggerUi } from "./utils/index.js";
+import { config, Logger, getSwaggerSpec, swaggerUi, createHttpClient } from "./utils/index.js";
 import { MainSDK } from "./MainSDK.js";
 import { configureRouter } from "./api/router.js";
 import { collectDefaultMetrics } from "prom-client";
-
-dotenv.config();
 
 collectDefaultMetrics();
 
@@ -30,12 +27,20 @@ const startServer = () => {
   app.use(express.json());
   app.use(express.urlencoded({ extended: true }));
 
+  // Initialize HTTP client with optional overrides from environment
+  const httpTimeout = process.env.HTTP_TIMEOUT ? parseInt(process.env.HTTP_TIMEOUT, 10) : undefined;
+  const httpClient = createHttpClient({
+    timeout: httpTimeout,
+    userAgent: process.env.HTTP_USER_AGENT,
+  });
+
   // Initialize a single shared SDK instance
   const sdk = new MainSDK({
     apiKey: config.FIREBLOCKS.apiKey || "",
     apiSecret: config.FIREBLOCKS.secretKey || "",
     basePath: (config.FIREBLOCKS.basePath as BasePath) || BasePath.US,
     testnet: config.TESTNET,
+    httpClient,
   });
 
   // Mount API routes

@@ -1,10 +1,24 @@
-import axios from "axios";
+import axios, { type AxiosInstance } from "axios";
+import { getPackageName, getPackageVersion } from "./package.js";
 
-const axiosInstance = axios.create({
-  headers: {
-    "User-Agent":
-      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
-  },
-});
+function defaultUserAgent(): string {
+  try {
+    return `${getPackageName()}/${getPackageVersion()}`;
+  } catch {
+    return "@fireblocks/seismic-sdk/unknown";
+  }
+}
 
-export default axiosInstance;
+export function createHttpClient(opts?: {
+  userAgent?: string;
+  timeout?: number;
+  instance?: AxiosInstance;
+}): AxiosInstance {
+  if (opts?.instance) return opts.instance;
+  return axios.create({
+    headers: { "User-Agent": opts?.userAgent ?? defaultUserAgent() },
+    ...(opts?.timeout !== undefined ? { timeout: opts.timeout } : {}),
+  });
+}
+
+export default createHttpClient();

@@ -40,6 +40,8 @@ The server starts on `http://localhost:8000` (configurable via `PORT`).
 | `PORT`                                |          | HTTP server port (default: `8000`)                                                                                                   |
 | `LOG_LEVEL`                           |          | `DEBUG` \| `INFO` \| `WARN` \| `ERROR` (default: `INFO`)                                                                             |
 | `SOCIALSCAN_API_KEY`                  |          | SocialScan Explorer API key - required for native ETH history. Get one at [developer.socialscan.io](https://developer.socialscan.io) |
+| `HTTP_TIMEOUT`                        |          | HTTP client timeout in milliseconds (default: `30000`)                                                                               |
+| `HTTP_USER_AGENT`                     |          | HTTP `User-Agent` header (default: `@fireblocks/seismic-sdk/<version>`)                                                              |
 
 ---
 
@@ -188,7 +190,7 @@ When `type=all`, each type is fetched in parallel and fails independently. If on
 ## Library Usage
 
 ```typescript
-import { MainSDK } from "@fireblocks/seismic-sdk";
+import { MainSDK, createHttpClient } from "@fireblocks/seismic-sdk";
 import { BasePath } from "@fireblocks/ts-sdk";
 
 const sdk = new MainSDK({
@@ -196,6 +198,8 @@ const sdk = new MainSDK({
   apiSecret: process.env.FIREBLOCKS_API_USER_SECRET_KEY_PATH!,
   basePath: BasePath.US,
   testnet: true,
+  // Optional: customize the HTTP client (timeout, User-Agent, interceptors, etc.)
+  httpClient: createHttpClient({ timeout: 10_000, userAgent: "MyApp/1.0" }),
 });
 
 // Vault identity (lazy - runs on first use)
