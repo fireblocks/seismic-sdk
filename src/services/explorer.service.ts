@@ -1,11 +1,11 @@
-import { AxiosError } from "axios";
-import axiosInstance from "../utils/httpClient.js";
+import { AxiosError, type AxiosInstance } from "axios";
 import { Transaction, TransactionType } from "../types/index.js";
 import {
   DEFAULT_TOKEN_DECIMALS,
   SRC20_TRANSFER_TOPIC,
   SOCIALSCAN_API_URL,
   Logger,
+  createHttpClient,
 } from "../utils/index.js";
 
 // ─── SocialScan response shapes ─────────────────────────────────────────────
@@ -81,11 +81,13 @@ export class ExplorerService {
   private readonly baseUrl: string;
   private readonly rpcUrl: string;
   private readonly logger = new Logger("services:explorer");
+  private readonly httpClient: AxiosInstance;
 
-  constructor(apiKey: string, testnet = true, rpcUrl: string) {
+  constructor(apiKey: string, testnet = true, rpcUrl: string, httpClient?: AxiosInstance) {
     this.apiKey = apiKey;
     this.baseUrl = testnet ? SOCIALSCAN_API_URL.testnet : SOCIALSCAN_API_URL.mainnet;
     this.rpcUrl = rpcUrl;
+    this.httpClient = httpClient ?? createHttpClient();
     if (!this.baseUrl) {
       throw new Error("ExplorerService: mainnet SocialScan URL is not yet available");
     }
@@ -106,7 +108,7 @@ export class ExplorerService {
    * SocialScan has no proxy module, so we go directly to the node.
    */
   private async getLatestBlock(): Promise<number> {
-    const response = await axiosInstance.post<{ result: string }>(this.rpcUrl, {
+    const response = await this.httpClient.post<{ result: string }>(this.rpcUrl, {
       jsonrpc: "2.0",
       method: "eth_blockNumber",
       params: [],
@@ -171,7 +173,7 @@ export class ExplorerService {
     for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
     url.searchParams.set("apikey", this.apiKey);
 
-    const response = await axiosInstance.get<ExplorerApiResponse<T>>(url.toString());
+    const response = await this.httpClient.get<ExplorerApiResponse<T>>(url.toString());
     const { status, message, result } = response.data;
 
     // status "0" with "No transactions found" is a valid empty response
