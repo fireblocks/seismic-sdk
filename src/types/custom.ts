@@ -60,6 +60,22 @@ export type GetFtBalancesResponse = {
   error?: string;
 };
 
+export interface TokenBalance {
+  contractAddress: string;
+  name?: string | null;
+  symbol?: string | null;
+  decimals?: number | null;
+  balance?: number;
+  rawBalance?: string;
+}
+
+export interface TokenBalancesResult {
+  erc20?: TokenBalance[];
+  src20?: TokenBalance[];
+  erc20Error?: string;
+  src20Error?: string;
+}
+
 /** Configuration options for initializing the Fireblocks SDK
  */
 export interface FireblocksConfig {
