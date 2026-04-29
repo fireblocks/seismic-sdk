@@ -10,8 +10,10 @@ import {
   serializeTransaction,
   parseUnits,
 } from "viem";
+import type { AxiosInstance } from "axios";
 import { toAccount } from "viem/accounts";
-import { FireblocksService, BlockchainApiService } from "./services/index.js";
+import { FireblocksService } from "./services/fireblocks.service.js";
+import { BlockchainApiService } from "./services/seismic.service.js";
 import {
   BroadcastResult,
   CreateTransactionResponse,
@@ -19,12 +21,13 @@ import {
   FireblocksConfig,
   GetFtBalancesResponse,
   GetNativeBalanceResponse,
+  TokenBalancesResult,
   TokenType,
   Transaction,
   TransactionType,
   VaultData,
+  SdkApiError,
 } from "./types/index.js";
-import { SdkApiError } from "./types/errors.js";
 import {
   Logger,
   validateApiCredentials,
@@ -43,6 +46,17 @@ import { buildBalanceReadMessage, createExpiry } from "./seismic/signature.js";
  */
 export interface MainSDKConfig extends FireblocksConfig {
   logger?: Logger;
+  /** Override the Seismic RPC URL (defaults to env RPC_URL or the network default) */
+  rpcUrl?: string;
+  /** SocialScan API key for native/ERC-20 history (defaults to env SOCIALSCAN_API_KEY) */
+  socialscanApiKey?: string;
+  /** Inject a custom Axios instance for all HTTP calls (useful for testing) */
+  httpClient?: AxiosInstance;
+  /** Optional service overrides for testing */
+  services?: {
+    fireblocks?: FireblocksService;
+    blockchainApi?: BlockchainApiService;
+  };
 }
 
 export class MainSDK {
@@ -61,13 +75,21 @@ export class MainSDK {
   constructor(config: MainSDKConfig) {
     try {
       validateApiCredentials(config.apiKey, config.apiSecret);
-      this.fireblocksService = new FireblocksService({
-        apiKey: config.apiKey,
-        apiSecret: config.apiSecret,
-        basePath: config.basePath,
-        testnet: config.testnet,
-      });
-      this.blockchainApiService = new BlockchainApiService(config.testnet ?? false);
+      this.fireblocksService =
+        config.services?.fireblocks ??
+        new FireblocksService({
+          apiKey: config.apiKey,
+          apiSecret: config.apiSecret,
+          basePath: config.basePath,
+          testnet: config.testnet,
+        });
+      this.blockchainApiService =
+        config.services?.blockchainApi ??
+        new BlockchainApiService(config.testnet ?? false, {
+          rpcUrl: config.rpcUrl ?? process.env.RPC_URL,
+          socialscanApiKey: config.socialscanApiKey ?? process.env.SOCIALSCAN_API_KEY,
+          httpClient: config.httpClient,
+        });
       this.logger = config.logger ?? new Logger("MainSDK");
       this.logger.info("MainSDK initialized successfully");
     } catch (error) {
@@ -95,19 +117,51 @@ export class MainSDK {
     return entry;
   }
 
+  /**
+   * Fetches ERC-20 token metadata (name, symbol, decimals, totalSupply).
+   * @param contractAddress - ERC-20 contract address
+   */
   public async getErc20Info(contractAddress: string): Promise<{
-    name: string | null;
-    symbol: string | null;
-    decimals: number | null;
-    totalSupply: string | null;
+    success: boolean;
+    data?: {
+      name: string | null;
+      symbol: string | null;
+      decimals: number | null;
+      totalSupply: string | null;
+    };
+    error?: string;
   }> {
-    return this.blockchainApiService.getErc20Info(contractAddress);
+    try {
+      const data = await this.blockchainApiService.getErc20Info(contractAddress);
+      return { success: true, data };
+    } catch (error) {
+      return { success: false, error: formatErrorMessage(error) };
+    }
   }
 
-  public async getTransactionByHash(txHash: string): Promise<Record<string, unknown> | null> {
-    return this.blockchainApiService.getTransactionByHash(txHash);
+  /**
+   * Fetches a transaction by hash.
+   * @param txHash - Transaction hash (0x-prefixed)
+   */
+  public async getTransactionByHash(txHash: string): Promise<{
+    success: boolean;
+    data?: Record<string, unknown> | null;
+    error?: string;
+  }> {
+    try {
+      const data = await this.blockchainApiService.getTransactionByHash(txHash);
+      return { success: true, data };
+    } catch (error) {
+      return { success: false, error: formatErrorMessage(error) };
+    }
   }
 
+  /**
+   * Retrieves transaction history for a vault.
+   * Routes by type: native (requires SOCIALSCAN_API_KEY), erc20, src20, all.
+   * @param params.vaultId - Vault account ID
+   * @param params.type - Asset type filter
+   */
   public async getTransactionHistory(params: {
     vaultId: string;
     type?: "native" | "erc20" | "src20" | "all";
@@ -119,65 +173,80 @@ export class MainSDK {
     limit?: number;
     offset?: number;
   }): Promise<{
-    transactions: Transaction[];
-    fromBlock: string;
-    toBlock: string;
-    source: string;
-    total: number;
+    success: boolean;
+    transactions?: Transaction[];
+    fromBlock?: string;
+    toBlock?: string;
+    source?: string;
+    total?: number;
     warning?: string;
+    error?: string;
   }> {
-    const vaultData = await this.ensureVaultData(params.vaultId);
+    try {
+      const vaultData = await this.ensureVaultData(params.vaultId);
 
-    let encryptionSk: Hex | undefined;
-    let viewingKey: Hex | undefined;
+      let encryptionSk: Hex | undefined;
+      let viewingKey: Hex | undefined;
 
-    if (params.type === "src20" || params.type === "all") {
-      try {
-        // Viewing key path: decrypt amounts directly from Transfer event data (zero N+1).
-        // Only available after the vault has called registerViewingKey() once.
-        const isRegistered = await this.checkViewingKeyRegistered(params.vaultId);
-        if (isRegistered) {
-          // Viewing key decrypts received transfers from event data.
-          viewingKey = await this.deriveViewingKey(params.vaultId);
+      if (params.type === "src20" || params.type === "all") {
+        try {
+          const isRegistered = await this.checkViewingKeyRegistered(params.vaultId);
+          if (isRegistered) {
+            viewingKey = await this.deriveViewingKey(params.vaultId);
+          }
+          encryptionSk = await this.deriveEncryptionKey(params.vaultId);
+        } catch (err) {
+          this.logger.warn(
+            `Could not derive keys for SRC-20 history - amounts will be 0: ${(err as Error).message}`
+          );
         }
-        encryptionSk = await this.deriveEncryptionKey(params.vaultId);
-      } catch (err) {
-        this.logger.warn(
-          `Could not derive keys for SRC-20 history - amounts will be 0: ${(err as Error).message}`
-        );
       }
-    }
 
-    return this.blockchainApiService.getTransactionHistory({
-      address: vaultData.address,
-      type: params.type,
-      fromBlock: params.fromBlock,
-      toBlock: params.toBlock,
-      before: params.before,
-      after: params.after,
-      contracts: params.contracts,
-      limit: params.limit,
-      offset: params.offset,
-      encryptionSk,
-      viewingKey,
-    });
+      const result = await this.blockchainApiService.getTransactionHistory({
+        address: vaultData.address,
+        type: params.type,
+        fromBlock: params.fromBlock,
+        toBlock: params.toBlock,
+        before: params.before,
+        after: params.after,
+        contracts: params.contracts,
+        limit: params.limit,
+        offset: params.offset,
+        encryptionSk,
+        viewingKey,
+      });
+
+      return {
+        success: true,
+        transactions: result.transactions,
+        fromBlock: result.fromBlock,
+        toBlock: result.toBlock,
+        source: result.source,
+        total: result.total,
+        warning: result.warning,
+      };
+    } catch (error) {
+      return { success: false, error: formatErrorMessage(error) };
+    }
   }
 
   /**
-   * Get the FireblocksService instance for direct access to Fireblocks operations
-   *
-   * @returns The FireblocksService instance
+   * @deprecated Inject via MainSDKConfig.services for testing; direct access will be removed in a future major version.
    */
   public getFireblocksService(): FireblocksService {
+    this.logger.warn(
+      "getFireblocksService() is deprecated and will be removed in a future version."
+    );
     return this.fireblocksService;
   }
 
   /**
-   * Get the BlockchainApiService instance for direct access to blockchain API operations
-   *
-   * @returns The BlockchainApiService instance
+   * @deprecated Inject via MainSDKConfig.services for testing; direct access will be removed in a future major version.
    */
   public getBlockchainApiService(): BlockchainApiService {
+    this.logger.warn(
+      "getBlockchainApiService() is deprecated and will be removed in a future version."
+    );
     return this.blockchainApiService;
   }
 
@@ -330,16 +399,20 @@ export class MainSDK {
     if (!recipient && !destinationVaultId) {
       return { success: false, error: "Either recipient or destinationVaultId must be provided" };
     }
-    if (type !== "ETH" && !contractAddress) {
-      return { success: false, error: "contractAddress is required for ERC20 and SRC20 transfers" };
+    const to = destinationVaultId
+      ? await this.getSeismicAddress(destinationVaultId)
+      : (recipient as string);
+
+    if (type === "SRC20") {
+      if (!contractAddress)
+        return { success: false, error: "contractAddress is required for SRC20" };
+      return this.createShieldedTransaction(vaultId, to, amount, contractAddress, note);
     }
-
-    const to = destinationVaultId ? await this.getSeismicAddress(destinationVaultId) : recipient!;
-
-    if (type === "SRC20")
-      return this.createShieldedTransaction(vaultId, to, amount, contractAddress!, note);
-    if (type === "ERC20")
-      return this.createErc20Transaction(vaultId, to, amount, contractAddress!, decimals, note);
+    if (type === "ERC20") {
+      if (!contractAddress)
+        return { success: false, error: "contractAddress is required for ERC20" };
+      return this.createErc20Transaction(vaultId, to, amount, contractAddress, decimals, note);
+    }
     return this.createNativeTransaction(vaultId, to, amount, false, note);
   };
 
@@ -379,7 +452,10 @@ export class MainSDK {
         };
       }
 
-      const adjustedAmount = unitsToCoin(paramsValidationResponse.finalAmount!);
+      if (paramsValidationResponse.finalAmount === undefined) {
+        return { success: false, error: "Could not determine transaction amount" };
+      }
+      const adjustedAmount = unitsToCoin(paramsValidationResponse.finalAmount);
 
       const result = await this.buildSignSendTransaction(
         vaultData,
@@ -448,8 +524,13 @@ export class MainSDK {
 
       const nonce = parseInt(hexNonce, 16);
       const gasPrice = BigInt(hexGasPrice);
-      const gasLimit = 100_000n; // ERC-20 transfer gas
       const chainId = this.blockchainApiService.getChainId();
+      const gasLimit = await this.blockchainApiService
+        .jsonRpc<string>("eth_estimateGas", [
+          { from: vaultData.address, to: contractAddress, data: calldata },
+        ])
+        .then((hex) => (BigInt(hex) * 120n) / 100n)
+        .catch(() => 100_000n);
 
       const rlpEncoded = toRlp([
         nonce === 0 ? "0x" : numberToHex(nonce),
@@ -580,7 +661,7 @@ export class MainSDK {
     vaultId: string,
     type: "erc20" | "src20" | "all" = "all",
     contracts?: string[]
-  ): Promise<Record<string, unknown>> => {
+  ): Promise<TokenBalancesResult> => {
     const { address } = await this.ensureVaultData(vaultId);
 
     const fetchErc20 = async () => {
