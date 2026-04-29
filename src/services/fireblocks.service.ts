@@ -1,7 +1,6 @@
 import { Fireblocks, SignedMessage, TransactionRequest } from "@fireblocks/ts-sdk";
 import { FireblocksSigner } from "./fireblocksSigner.js";
-import { FireblocksConfig } from "../types/index.js";
-import { SdkApiError } from "../types/errors.js";
+import { FireblocksConfig, SdkApiError } from "../types/index.js";
 import {
   Logger,
   getPublicKeyForDerivationPathAndAlgorithm,
