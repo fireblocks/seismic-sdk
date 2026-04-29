@@ -1,4 +1,4 @@
-export * from "./explorer.service.js";
-export * from "./fireblocks.service.js";
-export * from "./fireblocksSigner.js";
-export * from "./seismic.service.js";
+export { ExplorerService } from "./explorer.service.js";
+export { FireblocksSigner } from "./fireblocksSigner.js";
+export type { FireblocksService } from "./fireblocks.service.js";
+export type { BlockchainApiService } from "./seismic.service.js";
