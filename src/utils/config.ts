@@ -1,6 +1,5 @@
 import { readFileSync } from "fs";
 import { BasePath } from "@fireblocks/ts-sdk";
-import dotenv from "dotenv";
 import { getPackageName } from "./index.js";
 import { Config, CustomConfig } from "../types/index.js";
 import { Logger } from "./logger.js";
@@ -35,8 +34,6 @@ const validateBasePath = (basePath: string): BasePath => {
 };
 
 const loadConfigFromEnv = (): Config => {
-  dotenv.config();
-
   return {
     PORT: Number(process.env.PORT) || 8000,
     FIREBLOCKS: {
