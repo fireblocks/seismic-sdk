@@ -1,8 +1,8 @@
 // Utility functions and helpers
 
-import fs, { readFileSync } from "fs";
+import { readFileSync } from "fs";
 import { BasePath } from "@fireblocks/ts-sdk";
-import { isAddress } from "viem";
+import { isAddress, parseUnits } from "viem";
 import {
   FireblocksConfig,
   GetFtBalancesResponse,
@@ -33,8 +33,7 @@ export const getFinalFireblocksSDKParams = (
         ? readFileSync(fireblocksConfig.apiSecret, "utf8")
         : fireblocksConfig.apiSecret;
   } else {
-    const secretKeyPath = process.env.FIREBLOCKS_API_USER_SECRET_KEY_PATH || "";
-    privateKey = fs.readFileSync(secretKeyPath, "utf8");
+    privateKey = config.FIREBLOCKS.secretKey ?? "";
   }
 
   const apiKey: string = fireblocksConfig?.apiKey ?? config.FIREBLOCKS.apiKey ?? "";
@@ -200,8 +199,7 @@ export const validateAddress = (address: string): boolean => {
 
 // Converts ETH (human-readable) to wei (10^18 smallest units)
 export const coinToUnits = (amount: number | string): bigint => {
-  const n = typeof amount === "string" ? parseFloat(amount) : amount;
-  return BigInt(Math.round(n * 10 ** chain_info.coinDecimals));
+  return parseUnits(String(amount), chain_info.coinDecimals);
 };
 
 // Converts wei back to ETH (human-readable)
@@ -215,8 +213,7 @@ export const ftToUnits = (
   _token: TokenType,
   decimals: number = 18
 ): bigint => {
-  const n = typeof amount === "string" ? parseFloat(amount) : amount;
-  return BigInt(Math.round(n * 10 ** decimals));
+  return parseUnits(String(amount), decimals);
 };
 
 const safeStringify = (obj: unknown): string => {
