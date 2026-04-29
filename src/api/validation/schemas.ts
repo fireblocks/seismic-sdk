@@ -168,7 +168,7 @@ export const contractsQuery = z.object({
     .transform((val) =>
       (Array.isArray(val) ? val : val.split(",")).map((s) => s.trim()).filter(Boolean)
     )
-    .refine((addrs) => addrs.length > 0 && addrs.every((a) => /^0x[0-9a-fA-F]{40}$/.test(a)), {
+    .refine((addr) => addr.length > 0 && addr.every((a) => /^0x[0-9a-fA-F]{40}$/.test(a)), {
       message: "each contract must be a valid 0x-prefixed EVM address",
     }),
 });
@@ -183,7 +183,7 @@ export const tokenBalancesQuery = z.object({
     .transform((val) =>
       (Array.isArray(val) ? val : val.split(",")).map((s) => s.trim()).filter(Boolean)
     )
-    .refine((addrs) => addrs.every((a) => /^0x[0-9a-fA-F]{40}$/.test(a)), {
+    .refine((addr) => addr.every((a) => /^0x[0-9a-fA-F]{40}$/.test(a)), {
       message: "each contract must be a valid 0x-prefixed EVM address",
     })
     .optional(),
