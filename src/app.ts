@@ -3,9 +3,24 @@ dotenv.config();
 
 import startServer from "./server.js";
 
-import { Logger } from "./utils/index.js";
+import { Logger, LogLevel } from "./utils/index.js";
 
 const logger = new Logger("app:server-initializer");
+
+if (process.env.LOG_LEVEL) {
+  const envLevel = process.env.LOG_LEVEL.toUpperCase();
+  const levelMap: Record<string, LogLevel> = {
+    DEBUG: LogLevel.DEBUG,
+    INFO: LogLevel.INFO,
+    WARN: LogLevel.WARN,
+    ERROR: LogLevel.ERROR,
+    NONE: LogLevel.NONE,
+  };
+  if (levelMap[envLevel] !== undefined) {
+    Logger.setLogLevel(levelMap[envLevel]);
+  }
+}
+
 (() => {
   try {
     logger.info("server starting...");

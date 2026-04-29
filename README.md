@@ -38,7 +38,7 @@ The server starts on `http://localhost:8000` (configurable via `PORT`).
 | `BASE_PATH`                           |          | `US` \| `EU` \| `SANDBOX` (default: `US`)                                                                                            |
 | `RPC_URL`                             |          | Seismic RPC endpoint (default: `https://gcp-1.seismictest.net/rpc`)                                                                  |
 | `PORT`                                |          | HTTP server port (default: `8000`)                                                                                                   |
-| `LOG_LEVEL`                           |          | `DEBUG` \| `INFO` \| `WARN` \| `ERROR` (default: `INFO`)                                                                             |
+| `LOG_LEVEL`                           |          | `DEBUG` \| `INFO` \| `WARN` \| `ERROR` \| `NONE` (case-insensitive, default: `INFO`)                                                 |
 | `SOCIALSCAN_API_KEY`                  |          | SocialScan Explorer API key - required for native ETH history. Get one at [developer.socialscan.io](https://developer.socialscan.io) |
 | `HTTP_TIMEOUT`                        |          | HTTP client timeout in milliseconds (default: `30000`)                                                                               |
 | `HTTP_USER_AGENT`                     |          | HTTP `User-Agent` header (default: `@fireblocks/seismic-sdk/<version>`)                                                              |

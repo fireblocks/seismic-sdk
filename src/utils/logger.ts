@@ -159,25 +159,3 @@ export class Logger {
     return new Logger(`${this.context}:${subContext}`, this.instanceLevel);
   }
 }
-
-// Set log level from environment variable if available
-if (typeof process !== "undefined" && process.env.LOG_LEVEL) {
-  const envLevel = process.env.LOG_LEVEL.toUpperCase();
-  switch (envLevel) {
-    case "DEBUG":
-      Logger.setLogLevel(LogLevel.DEBUG);
-      break;
-    case "INFO":
-      Logger.setLogLevel(LogLevel.INFO);
-      break;
-    case "WARN":
-      Logger.setLogLevel(LogLevel.WARN);
-      break;
-    case "ERROR":
-      Logger.setLogLevel(LogLevel.ERROR);
-      break;
-    case "NONE":
-      Logger.setLogLevel(LogLevel.NONE);
-      break;
-  }
-}
