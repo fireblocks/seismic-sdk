@@ -39,26 +39,22 @@ import { type Hex } from "viem";
 import { BasePath } from "@fireblocks/ts-sdk";
 import { GetTransactionsHistoryOpts } from "./index.js";
 
-/**
- * Response type for getting native balance
- */
-export type GetNativeBalanceResponse = {
-  success: boolean;
-  balance?: number;
-  error?: string;
-};
 
-/**
- * Response type for getting fungible token balances
- */
-export type GetFtBalancesResponse = {
-  success: boolean;
-  data?: {
-    token: TokenType;
-    balance: number;
-  }[];
-  error?: string;
-};
+export interface TokenBalance {
+  contractAddress: string;
+  name?: string | null;
+  symbol?: string | null;
+  decimals?: number | null;
+  balance?: number;
+  rawBalance?: string;
+}
+
+export interface TokenBalancesResult {
+  erc20?: TokenBalance[];
+  src20?: TokenBalance[];
+  erc20Error?: string;
+  src20Error?: string;
+}
 
 /** Configuration options for initializing the Fireblocks SDK
  */
@@ -69,24 +65,6 @@ export interface FireblocksConfig {
   testnet?: boolean;
 }
 
-/** Response type for creating a transaction,
- * if successful includes the transaction hash that was created, else includes an error message.
- */
-export type CreateTransactionResponse = {
-  success: boolean;
-  txHash?: string;
-  error?: string;
-};
-
-/**
- * Response type for getting transaction history
- * Includes an array of transactions (if successful) or an error message.
- */
-export type GetTransactionHistoryResponse = {
-  success: boolean;
-  data?: Transaction[];
-  error?: string;
-};
 
 export type GetTransactionHistoryFromIndexerOpts = {
   address: string;
@@ -211,11 +189,6 @@ export enum Networks {
   Testnet = "seismic_testnet",
 }
 
-export type SDKResponse =
-  | GetNativeBalanceResponse
-  | string
-  | CreateTransactionResponse
-  | GetTransactionHistoryResponse;
 
 /**
  * Per-vault identity state cached in MainSDK's vault map.
@@ -239,3 +212,8 @@ export interface VaultData {
  * SRC20 - Seismic shielded transfer (type 0x4A, AES-GCM encrypted calldata)
  */
 export type TransferType = "ETH" | "ERC20" | "SRC20";
+
+/**
+ * Response types for getter methods that previously threw errors.
+ * Standardized to return { success, data?, error? } for consistency.
+ */

@@ -9,14 +9,14 @@ import {
 } from "@fireblocks/ts-sdk";
 import { type Hex, concat, pad, toHex } from "viem";
 import {
+  Logger,
   derivationPath,
   formatErrorMessage,
   FIREBLOCKS_RAW_SIGN_ASSET_ID,
   withRetry,
   getTxStatus,
 } from "../utils/index.js";
-import { Logger } from "../utils/logger.js";
-import { SdkApiError } from "../types/errors.js";
+import { SdkApiError } from "../types/index.js";
 
 export class FireblocksSigner {
   private readonly logger = new Logger("services:fireblocks-signer");

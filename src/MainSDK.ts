@@ -10,21 +10,21 @@ import {
   serializeTransaction,
   parseUnits,
 } from "viem";
+import type { AxiosInstance } from "axios";
 import { toAccount } from "viem/accounts";
-import { FireblocksService, BlockchainApiService } from "./services/index.js";
+import { FireblocksService } from "./services/fireblocks.service.js";
+import { BlockchainApiService } from "./services/seismic.service.js";
 import {
   BroadcastResult,
-  CreateTransactionResponse,
   EvmTxFields,
   FireblocksConfig,
-  GetFtBalancesResponse,
-  GetNativeBalanceResponse,
+  TokenBalancesResult,
   TokenType,
   Transaction,
   TransactionType,
   VaultData,
+  SdkApiError,
 } from "./types/index.js";
-import { SdkApiError } from "./types/errors.js";
 import {
   Logger,
   validateApiCredentials,
@@ -34,15 +34,48 @@ import {
   SEED_MESSAGE_HEX,
   ERC20_SELECTORS,
   DEFAULT_TOKEN_DECIMALS,
+  getConfig,
 } from "./utils/index.js";
 import { deriveKeyFromSignature } from "./crypto/key-derivation.js";
 import { buildBalanceReadMessage, createExpiry } from "./seismic/signature.js";
+
+/**
+ * ERROR HANDLING
+ *
+ * All public methods throw `SdkApiError` on failure. Success path returns the
+ * result data directly. SdkApiError carries:
+ *   - statusCode (HTTP-style)
+ *   - errorType (machine-readable)
+ *   - service (origin)
+ *   - errorInfo (extra context)
+ *
+ * Library consumers should wrap calls in try/catch:
+ *
+ *   try {
+ *     const balance = await sdk.getNativeBalance(vaultId);
+ *   } catch (err) {
+ *     if (err instanceof SdkApiError) {
+ *       // err.statusCode, err.errorType, err.service available
+ *     }
+ *   }
+ */
 
 /**
  * Configuration for MainSDK
  */
 export interface MainSDKConfig extends FireblocksConfig {
   logger?: Logger;
+  /** Override the Seismic RPC URL (defaults to env RPC_URL or the network default) */
+  rpcUrl?: string;
+  /** SocialScan API key for native/ERC-20 history (defaults to env SOCIALSCAN_API_KEY) */
+  socialscanApiKey?: string;
+  /** Inject a custom Axios instance for all HTTP calls (useful for testing) */
+  httpClient?: AxiosInstance;
+  /** Optional service overrides for testing */
+  services?: {
+    fireblocks?: FireblocksService;
+    blockchainApi?: BlockchainApiService;
+  };
 }
 
 export class MainSDK {
@@ -61,17 +94,26 @@ export class MainSDK {
   constructor(config: MainSDKConfig) {
     try {
       validateApiCredentials(config.apiKey, config.apiSecret);
-      this.fireblocksService = new FireblocksService({
-        apiKey: config.apiKey,
-        apiSecret: config.apiSecret,
-        basePath: config.basePath,
-        testnet: config.testnet,
-      });
-      this.blockchainApiService = new BlockchainApiService(config.testnet ?? false);
+      this.fireblocksService =
+        config.services?.fireblocks ??
+        new FireblocksService({
+          apiKey: config.apiKey,
+          apiSecret: config.apiSecret,
+          basePath: config.basePath,
+          testnet: config.testnet,
+        });
+      this.blockchainApiService =
+        config.services?.blockchainApi ??
+        new BlockchainApiService(config.testnet ?? false, {
+          rpcUrl: config.rpcUrl ?? getConfig().RPC_URL,
+          socialscanApiKey: config.socialscanApiKey ?? getConfig().SOCIALSCAN_API_KEY,
+          httpClient: config.httpClient,
+        });
       this.logger = config.logger ?? new Logger("MainSDK");
       this.logger.info("MainSDK initialized successfully");
     } catch (error) {
-      throw new Error(`Failed to initialize MainSDK: ${error}`);
+      if (error instanceof SdkApiError) throw error;
+      throw new SdkApiError(`Failed to initialize MainSDK: ${formatErrorMessage(error)}`, 500, "INIT_FAILED", undefined, "MainSDK");
     }
   }
 
@@ -95,6 +137,12 @@ export class MainSDK {
     return entry;
   }
 
+  /**
+   * Fetches ERC-20 token metadata (name, symbol, decimals, totalSupply).
+   * @param contractAddress - ERC-20 contract address
+   * @returns Token metadata object
+   * @throws SdkApiError on failure
+   */
   public async getErc20Info(contractAddress: string): Promise<{
     name: string | null;
     symbol: string | null;
@@ -104,10 +152,30 @@ export class MainSDK {
     return this.blockchainApiService.getErc20Info(contractAddress);
   }
 
+  /**
+   * Fetches a transaction by hash.
+   * @param txHash - Transaction hash (0x-prefixed)
+   * @returns Transaction object, or null if not found
+   * @throws SdkApiError on failure
+   */
   public async getTransactionByHash(txHash: string): Promise<Record<string, unknown> | null> {
     return this.blockchainApiService.getTransactionByHash(txHash);
   }
 
+  /**
+   * Retrieves transaction history for a vault.
+   * Routes by type: native (requires SOCIALSCAN_API_KEY), erc20, src20, all.
+   * @param params.vaultId - Vault account ID
+   * @param params.type - Asset type filter: "native" | "erc20" | "src20" | "all"
+   * @param params.fromBlock - Optional start block (hex format or "earliest")
+   * @param params.toBlock - Optional end block (hex format or "latest")
+   * @param params.before - Optional end date (YYYY-MM-DD format) - overrides toBlock
+   * @param params.after - Optional start date (YYYY-MM-DD format) - overrides fromBlock
+   * @param params.contracts - Optional contract addresses to filter by
+   * @param params.limit - Optional limit on number of results (default: 50)
+   * @param params.offset - Optional offset for pagination (default: 0)
+   * @returns Promise with success flag, array of transactions, and metadata (fromBlock, toBlock, source, total)
+   */
   public async getTransactionHistory(params: {
     vaultId: string;
     type?: "native" | "erc20" | "src20" | "all";
@@ -133,11 +201,8 @@ export class MainSDK {
 
     if (params.type === "src20" || params.type === "all") {
       try {
-        // Viewing key path: decrypt amounts directly from Transfer event data (zero N+1).
-        // Only available after the vault has called registerViewingKey() once.
         const isRegistered = await this.checkViewingKeyRegistered(params.vaultId);
         if (isRegistered) {
-          // Viewing key decrypts received transfers from event data.
           viewingKey = await this.deriveViewingKey(params.vaultId);
         }
         encryptionSk = await this.deriveEncryptionKey(params.vaultId);
@@ -164,20 +229,22 @@ export class MainSDK {
   }
 
   /**
-   * Get the FireblocksService instance for direct access to Fireblocks operations
-   *
-   * @returns The FireblocksService instance
+   * @deprecated Inject via MainSDKConfig.services for testing; direct access will be removed in a future major version.
    */
   public getFireblocksService(): FireblocksService {
+    this.logger.warn(
+      "getFireblocksService() is deprecated and will be removed in a future version."
+    );
     return this.fireblocksService;
   }
 
   /**
-   * Get the BlockchainApiService instance for direct access to blockchain API operations
-   *
-   * @returns The BlockchainApiService instance
+   * @deprecated Inject via MainSDKConfig.services for testing; direct access will be removed in a future major version.
    */
   public getBlockchainApiService(): BlockchainApiService {
+    this.logger.warn(
+      "getBlockchainApiService() is deprecated and will be removed in a future version."
+    );
     return this.blockchainApiService;
   }
 
@@ -187,16 +254,16 @@ export class MainSDK {
    * @param vaultAccountId - The Fireblocks vault account ID
    * @returns A promise that resolves to a {GetNativeBalanceResponse}
    */
-  public getNativeBalance = async (vaultAccountId: string): Promise<GetNativeBalanceResponse> => {
+  /**
+   * Retrieves the native coin balance for a vault account address.
+   * @param vaultAccountId - The Fireblocks vault account ID
+   * @returns Balance in ETH units
+   * @throws SdkApiError on failure
+   */
+  public getNativeBalance = async (vaultAccountId: string): Promise<number> => {
     this.logger.debug(`Fetching native balance for vault ${vaultAccountId}`);
-    try {
-      const { address } = await this.ensureVaultData(vaultAccountId);
-      const balance = await this.blockchainApiService.getNativeBalance(address);
-      return { success: true, balance };
-    } catch (error) {
-      this.logger.error(`Error fetching native balance: ${formatErrorMessage(error)}`);
-      return { success: false, error: formatErrorMessage(error) };
-    }
+    const { address } = await this.ensureVaultData(vaultAccountId);
+    return this.blockchainApiService.getNativeBalance(address);
   };
 
   /**
@@ -205,19 +272,19 @@ export class MainSDK {
    * @param vaultAccountId - The Fireblocks vault account ID
    * @returns A promise that resolves to a {GetFtBalancesResponse}
    */
-  public getFtBalances = async (vaultAccountId: string): Promise<GetFtBalancesResponse> => {
+  /**
+   * Retrieves the fungible token balances for a vault account address.
+   * @param vaultAccountId - The Fireblocks vault account ID
+   * @returns Array of token balances
+   * @throws SdkApiError on failure
+   */
+  public getFtBalances = async (
+    vaultAccountId: string
+  ): Promise<{ token: TokenType; balance: number }[]> => {
     this.logger.debug(`Fetching fungible token balances for vault ${vaultAccountId}`);
-    try {
-      const { address } = await this.ensureVaultData(vaultAccountId);
-      const balances = await this.blockchainApiService.getFTBalancesForAddress(address);
-      return {
-        success: true,
-        data: balances.map((b) => ({ token: b.token, balance: b.balance })),
-      };
-    } catch (error) {
-      this.logger.error(`Error fetching fungible token balances: ${formatErrorMessage(error)}`);
-      return { success: false, error: formatErrorMessage(error) };
-    }
+    const { address } = await this.ensureVaultData(vaultAccountId);
+    const balances = await this.blockchainApiService.getFTBalancesForAddress(address);
+    return balances.map((b) => ({ token: b.token, balance: b.balance }));
   };
 
   /**
@@ -306,6 +373,10 @@ export class MainSDK {
    * @example vault-to-address ERC-20
    *   sdk.transfer({ vaultId: "0", type: "ERC20", recipient: "0xABC...", amount: 100, contractAddress: "0xDEF..." })
    */
+  /**
+   * Unified transfer method - handles ETH, ERC-20, and SRC-20, vault-to-vault or vault-to-address.
+   * @throws SdkApiError on validation failure or transaction error
+   */
   public transfer = async (params: {
     vaultId: string;
     type: "ETH" | "ERC20" | "SRC20";
@@ -315,7 +386,7 @@ export class MainSDK {
     contractAddress?: string;
     decimals?: number;
     note?: string;
-  }): Promise<CreateTransactionResponse> => {
+  }): Promise<{ txHash: string }> => {
     const {
       vaultId,
       type,
@@ -328,18 +399,40 @@ export class MainSDK {
     } = params;
 
     if (!recipient && !destinationVaultId) {
-      return { success: false, error: "Either recipient or destinationVaultId must be provided" };
+      throw new SdkApiError(
+        "Either recipient or destinationVaultId must be provided",
+        400,
+        "VALIDATION_ERROR",
+        undefined,
+        "MainSDK"
+      );
     }
-    if (type !== "ETH" && !contractAddress) {
-      return { success: false, error: "contractAddress is required for ERC20 and SRC20 transfers" };
+    const to = destinationVaultId
+      ? await this.getSeismicAddress(destinationVaultId)
+      : (recipient as string);
+
+    if (type === "SRC20") {
+      if (!contractAddress)
+        throw new SdkApiError(
+          "contractAddress is required for SRC20",
+          400,
+          "VALIDATION_ERROR",
+          undefined,
+          "MainSDK"
+        );
+      return this.createShieldedTransaction(vaultId, to, amount, contractAddress, note);
     }
-
-    const to = destinationVaultId ? await this.getSeismicAddress(destinationVaultId) : recipient!;
-
-    if (type === "SRC20")
-      return this.createShieldedTransaction(vaultId, to, amount, contractAddress!, note);
-    if (type === "ERC20")
-      return this.createErc20Transaction(vaultId, to, amount, contractAddress!, decimals, note);
+    if (type === "ERC20") {
+      if (!contractAddress)
+        throw new SdkApiError(
+          "contractAddress is required for ERC20",
+          400,
+          "VALIDATION_ERROR",
+          undefined,
+          "MainSDK"
+        );
+      return this.createErc20Transaction(vaultId, to, amount, contractAddress, decimals, note);
+    }
     return this.createNativeTransaction(vaultId, to, amount, false, note);
   };
 
@@ -353,55 +446,69 @@ export class MainSDK {
    * @param note - Optional note attached to the raw signing request
    * @returns {CreateTransactionResponse} Promise
    */
+  /**
+   * Creates a native coin transaction to transfer funds to a recipient address.
+   * @throws SdkApiError on validation failure or transaction error
+   */
   public createNativeTransaction = async (
     vaultAccountId: string,
     recipientAddress: string,
     amount: string,
     grossTransaction: boolean = false,
     note?: string
-  ): Promise<CreateTransactionResponse> => {
-    try {
-      const vaultData = await this.ensureVaultData(vaultAccountId);
+  ): Promise<{ txHash: string }> => {
+    const vaultData = await this.ensureVaultData(vaultAccountId);
 
-      const paramsValidationResponse = await checkParamsAndAdjustAmount(
-        this,
-        vaultAccountId,
-        recipientAddress,
-        amount,
-        grossTransaction,
-        TransactionType.Native
-      );
+    const paramsValidationResponse = await checkParamsAndAdjustAmount(
+      this,
+      vaultAccountId,
+      recipientAddress,
+      amount,
+      grossTransaction,
+      TransactionType.Native
+    );
 
-      if (!paramsValidationResponse.validParams) {
-        return {
-          success: false,
-          error: `Invalid transaction parameters: ${paramsValidationResponse.reason}`,
-        };
-      }
-
-      const adjustedAmount = unitsToCoin(paramsValidationResponse.finalAmount!);
-
-      const result = await this.buildSignSendTransaction(
-        vaultData,
-        recipientAddress,
-        adjustedAmount,
-        TransactionType.Native,
+    if (!paramsValidationResponse.validParams) {
+      throw new SdkApiError(
+        `Invalid transaction parameters: ${paramsValidationResponse.reason}`,
+        400,
+        "VALIDATION_ERROR",
         undefined,
-        note
+        "MainSDK"
       );
-
-      if (!result || result.err) {
-        return {
-          success: false,
-          error: result?.err ? formatErrorMessage(result.err) : "unknown error",
-        };
-      }
-
-      return { success: true, txHash: result.txid };
-    } catch (error: unknown) {
-      this.logger.error(`Failed to create native transaction: ${formatErrorMessage(error)}`);
-      return { success: false, error: formatErrorMessage(error) };
     }
+
+    if (paramsValidationResponse.finalAmount === undefined) {
+      throw new SdkApiError(
+        "Could not determine transaction amount",
+        400,
+        "VALIDATION_ERROR",
+        undefined,
+        "MainSDK"
+      );
+    }
+    const adjustedAmount = unitsToCoin(paramsValidationResponse.finalAmount);
+
+    const result = await this.buildSignSendTransaction(
+      vaultData,
+      recipientAddress,
+      adjustedAmount,
+      TransactionType.Native,
+      undefined,
+      note
+    );
+
+    if (!result || result.err) {
+      throw new SdkApiError(
+        result?.err ? formatErrorMessage(result.err) : "Unknown broadcast error",
+        500,
+        "BROADCAST_FAILED",
+        undefined,
+        "MainSDK"
+      );
+    }
+
+    return { txHash: result.txid! };
   };
 
   /**
@@ -415,6 +522,10 @@ export class MainSDK {
    * @param decimals        - Token decimals (default: 18)
    * @param note            - Optional label on the Fireblocks signing request
    */
+  /**
+   * Transfers a standard ERC-20 token from a vault to a recipient.
+   * @throws SdkApiError on failure
+   */
   public createErc20Transaction = async (
     vaultAccountId: string,
     recipientAddress: string,
@@ -422,7 +533,7 @@ export class MainSDK {
     contractAddress: string,
     decimals?: number,
     note?: string
-  ): Promise<CreateTransactionResponse> => {
+  ): Promise<{ txHash: string }> => {
     try {
       const vaultData = await this.ensureVaultData(vaultAccountId);
 
@@ -448,8 +559,13 @@ export class MainSDK {
 
       const nonce = parseInt(hexNonce, 16);
       const gasPrice = BigInt(hexGasPrice);
-      const gasLimit = 100_000n; // ERC-20 transfer gas
       const chainId = this.blockchainApiService.getChainId();
+      const gasLimit = await this.blockchainApiService
+        .jsonRpc<string>("eth_estimateGas", [
+          { from: vaultData.address, to: contractAddress, data: calldata },
+        ])
+        .then((hex) => (BigInt(hex) * 120n) / 100n)
+        .catch(() => 100_000n);
 
       const rlpEncoded = toRlp([
         nonce === 0 ? "0x" : numberToHex(nonce),
@@ -472,7 +588,7 @@ export class MainSDK {
 
       const sig = signedMsg.signature;
       if (!sig?.r || !sig?.s || sig.v === undefined) {
-        throw new Error("Incomplete signature from Fireblocks");
+        throw new SdkApiError("Incomplete signature from Fireblocks", 502, "SIGNATURE_INCOMPLETE", undefined, "MainSDK");
       }
 
       const recoveryBit = sig.v < 27 ? sig.v : sig.v - 27;
@@ -494,12 +610,12 @@ export class MainSDK {
 
       const result = await this.blockchainApiService.broadcastTransaction(signedRlp);
       if (result.err) {
-        return { success: false, error: formatErrorMessage(result.err) };
+        throw new SdkApiError(formatErrorMessage(result.err), 500, "BROADCAST_FAILED", undefined, "MainSDK");
       }
-      return { success: true, txHash: result.txid };
+      return { txHash: result.txid! };
     } catch (error) {
-      this.logger.error(`Failed to create ERC-20 transaction: ${formatErrorMessage(error)}`);
-      return { success: false, error: formatErrorMessage(error) };
+      if (error instanceof SdkApiError) throw error;
+      throw new SdkApiError(`Failed to create ERC-20 transaction: ${formatErrorMessage(error)}`, 500, "ERC20_TX_FAILED", undefined, "MainSDK");
     }
   };
 
@@ -580,7 +696,7 @@ export class MainSDK {
     vaultId: string,
     type: "erc20" | "src20" | "all" = "all",
     contracts?: string[]
-  ): Promise<Record<string, unknown>> => {
+  ): Promise<TokenBalancesResult> => {
     const { address } = await this.ensureVaultData(vaultId);
 
     const fetchErc20 = async () => {
@@ -626,16 +742,18 @@ export class MainSDK {
       if (contractList.length === 0) return [];
       return Promise.all(
         contractList.map(async (contractAddress) => {
-          const result = await this.getSrc20Balance(vaultId, contractAddress);
-          const info = (await this.blockchainApiService
-            .getErc20Info(contractAddress)
-            .catch(() => ({}))) as { name?: string; symbol?: string; decimals?: number };
+          const [balanceResult, infoResult] = await Promise.allSettled([
+            this.getSrc20Balance(vaultId, contractAddress),
+            this.blockchainApiService.getErc20Info(contractAddress),
+          ]);
+          const balance = balanceResult.status === "fulfilled" ? balanceResult.value : 0;
+          const info = infoResult.status === "fulfilled" ? infoResult.value : {} as { name?: string | null; symbol?: string | null; decimals?: number | null };
           return {
             contractAddress,
-            name: info.name,
-            symbol: info.symbol,
-            decimals: info.decimals,
-            ...result,
+            name: info.name ?? null,
+            symbol: info.symbol ?? null,
+            decimals: info.decimals ?? null,
+            balance,
           };
         })
       );
@@ -681,7 +799,7 @@ export class MainSDK {
     );
 
     const fullSig = signedMsg.signature?.fullSig;
-    if (!fullSig) throw new Error(`Fireblocks did not return a signature for vault ${vaultId}`);
+    if (!fullSig) throw new SdkApiError(`Fireblocks did not return a signature for vault ${vaultId}`, 502, "SIGNATURE_MISSING", undefined, "MainSDK");
 
     const encryptionSk = deriveKeyFromSignature(fullSig);
     vaultData.encryptionSk = encryptionSk;
@@ -702,55 +820,56 @@ export class MainSDK {
    * @param contractAddress - SRC-20 contract address (0x-prefixed)
    * @returns Balance in whole ETH units (wei / 1e18)
    */
+  /**
+   * Reads a vault's SRC-20 balance via a Fireblocks-signed read.
+   * @param vaultId         - Fireblocks vault account ID
+   * @param contractAddress - SRC-20 contract address (0x-prefixed)
+   * @returns Balance in whole token units (wei / 1e18)
+   * @throws SdkApiError on failure
+   */
   public getSrc20Balance = async (
     vaultId: string,
     contractAddress: string
-  ): Promise<GetNativeBalanceResponse> => {
-    try {
-      const { address } = await this.ensureVaultData(vaultId);
-      const ownerAddress = address as Address;
-      const expiry = createExpiry();
+  ): Promise<number> => {
+    const { address } = await this.ensureVaultData(vaultId);
+    const ownerAddress = address as Address;
+    const expiry = createExpiry();
 
-      const messageHash = buildBalanceReadMessage(ownerAddress, expiry);
-      const signedMsg = await this.fireblocksService.signTransaction(
-        messageHash.slice(2), // strip 0x
-        vaultId,
-        "src20-balance-read"
-      );
+    const messageHash = buildBalanceReadMessage(ownerAddress, expiry);
+    const signedMsg = await this.fireblocksService.signTransaction(
+      messageHash.slice(2), // strip 0x
+      vaultId,
+      "src20-balance-read"
+    );
 
-      // Pack r/s/v into 65-byte Ethereum signature (ecrecover format)
-      const sig = signedMsg.signature;
-      if (!sig?.r || !sig?.s || sig.v === undefined) {
-        throw new Error("Incomplete signature from Fireblocks (missing r, s, or v)");
-      }
-      const v = sig.v < 27 ? sig.v + 27 : sig.v;
-      const rPadded = pad(`0x${sig.r.replace(/^0x/, "")}` as Hex, { size: 32 });
-      const sPadded = pad(`0x${sig.s.replace(/^0x/, "")}` as Hex, { size: 32 });
-      const packedSignature = concat([rPadded, sPadded, toHex(v, { size: 1 })]);
-
-      // Use a plain unsigned eth_call via ShieldedPublicClient.
-      // balanceOfSigned does NOT check msg.sender (Seismic zeroes it for unsigned calls) -
-      // authorization comes entirely from the ecrecover check on packedSignature.
-      // Signed reads (type-0x4A → eth_call) are only needed for balance() which reads
-      // msg.sender's own balance; they also require the caller to have ETH for gas
-      // estimation, making them unsuitable here.
-      const publicClient = this.blockchainApiService.createPublicClient();
-      const rawBalance = await this.blockchainApiService.readSrc20BalanceSigned(
-        publicClient,
-        contractAddress as Address,
-        ownerAddress,
-        packedSignature,
-        expiry
-      );
-
-      const whole = rawBalance / BigInt(10 ** 18);
-      const remainder = rawBalance % BigInt(10 ** 18);
-      const balance = Number(whole) + Number(remainder) / 10 ** 18;
-      return { success: true, balance };
-    } catch (error) {
-      this.logger.error(`Error fetching SRC-20 balance: ${formatErrorMessage(error)}`);
-      return { success: false, error: formatErrorMessage(error) };
+    // Pack r/s/v into 65-byte Ethereum signature (ecrecover format)
+    const sig = signedMsg.signature;
+    if (!sig?.r || !sig?.s || sig.v === undefined) {
+      throw new SdkApiError("Incomplete signature from Fireblocks (missing r, s, or v)", 502, "SIGNATURE_INCOMPLETE", undefined, "MainSDK");
     }
+    const v = sig.v < 27 ? sig.v + 27 : sig.v;
+    const rPadded = pad(`0x${sig.r.replace(/^0x/, "")}` as Hex, { size: 32 });
+    const sPadded = pad(`0x${sig.s.replace(/^0x/, "")}` as Hex, { size: 32 });
+    const packedSignature = concat([rPadded, sPadded, toHex(v, { size: 1 })]);
+
+    // Use a plain unsigned eth_call via ShieldedPublicClient.
+    // balanceOfSigned does NOT check msg.sender (Seismic zeroes it for unsigned calls) -
+    // authorization comes entirely from the ecrecover check on packedSignature.
+    // Signed reads (type-0x4A → eth_call) are only needed for balance() which reads
+    // msg.sender's own balance; they also require the caller to have ETH for gas
+    // estimation, making them unsuitable here.
+    const publicClient = this.blockchainApiService.createPublicClient();
+    const rawBalance = await this.blockchainApiService.readSrc20BalanceSigned(
+      publicClient,
+      contractAddress as Address,
+      ownerAddress,
+      packedSignature,
+      expiry
+    );
+
+    const whole = rawBalance / BigInt(10 ** 18);
+    const remainder = rawBalance % BigInt(10 ** 18);
+    return Number(whole) + Number(remainder) / 10 ** 18;
   };
 
   /**
@@ -776,56 +895,54 @@ export class MainSDK {
    *
    * @param vaultId - Fireblocks vault account ID
    */
-  public registerViewingKey = async (vaultId: string): Promise<CreateTransactionResponse> => {
-    try {
-      const vaultData = await this.ensureVaultData(vaultId);
-      const encryptionSk = await this.deriveEncryptionKey(vaultId);
-      const viewingKey = await this.deriveViewingKey(vaultId);
+  /**
+   * @throws SdkApiError on failure
+   */
+  public registerViewingKey = async (vaultId: string): Promise<{ txHash: string }> => {
+    const vaultData = await this.ensureVaultData(vaultId);
+    const encryptionSk = await this.deriveEncryptionKey(vaultId);
+    const viewingKey = await this.deriveViewingKey(vaultId);
 
-      const fireblocksAccount = toAccount({
-        address: vaultData.address as Address,
-        signMessage: async () => {
-          throw new Error("signMessage not supported for Fireblocks account");
-        },
-        signTypedData: async () => {
-          throw new Error("signTypedData not supported for Fireblocks account");
-        },
-        signTransaction: async (transaction, options) => {
-          const serialize = (options?.serializer ?? serializeTransaction) as (
-            tx: unknown,
-            sig?: unknown
-          ) => Hex;
-          const serialized = serialize(transaction);
-          const hash = keccak256(serialized);
-          const signedMsg = await this.fireblocksService.signTransaction(
-            hash.slice(2),
-            vaultId,
-            "register-viewing-key"
-          );
-          const sig = signedMsg.signature;
-          if (!sig?.r || !sig?.s || sig.v === undefined) {
-            throw new Error("Incomplete signature from Fireblocks");
-          }
-          const r = `0x${sig.r.replace(/^0x/, "").padStart(64, "0")}` as Hex;
-          const s = `0x${sig.s.replace(/^0x/, "").padStart(64, "0")}` as Hex;
-          const v = BigInt(sig.v < 27 ? sig.v : sig.v - 27);
-          return serialize(transaction, { r, s, v });
-        },
-      });
+    const fireblocksAccount = toAccount({
+      address: vaultData.address as Address,
+      signMessage: async () => {
+        throw new SdkApiError("signMessage not supported for Fireblocks account", 400, "UNSUPPORTED_OPERATION", undefined, "MainSDK");
+      },
+      signTypedData: async () => {
+        throw new SdkApiError("signTypedData not supported for Fireblocks account", 400, "UNSUPPORTED_OPERATION", undefined, "MainSDK");
+      },
+      signTransaction: async (transaction, options) => {
+        const serialize = (options?.serializer ?? serializeTransaction) as (
+          tx: unknown,
+          sig?: unknown
+        ) => Hex;
+        const serialized = serialize(transaction);
+        const hash = keccak256(serialized);
+        const signedMsg = await this.fireblocksService.signTransaction(
+          hash.slice(2),
+          vaultId,
+          "register-viewing-key"
+        );
+        const sig = signedMsg.signature;
+        if (!sig?.r || !sig?.s || sig.v === undefined) {
+          throw new SdkApiError("Incomplete signature from Fireblocks", 502, "SIGNATURE_INCOMPLETE", undefined, "MainSDK");
+        }
+        const r = `0x${sig.r.replace(/^0x/, "").padStart(64, "0")}` as Hex;
+        const s = `0x${sig.s.replace(/^0x/, "").padStart(64, "0")}` as Hex;
+        const v = BigInt(sig.v < 27 ? sig.v : sig.v - 27);
+        return serialize(transaction, { r, s, v });
+      },
+    });
 
-      const client = await this.blockchainApiService.createShieldedClient(
-        fireblocksAccount,
-        encryptionSk
-      );
+    const client = await this.blockchainApiService.createShieldedClient(
+      fireblocksAccount,
+      encryptionSk
+    );
 
-      const txHash = await this.blockchainApiService.registerViewingKey(client, viewingKey);
-      vaultData.viewingKeyRegistered = true; // cache so next getTransactionHistory skips RPC check
-      this.logger.info(`Viewing key registered | vault:${vaultId} | tx:${txHash}`);
-      return { success: true, txHash };
-    } catch (error) {
-      this.logger.error(`Failed to register viewing key: ${formatErrorMessage(error)}`);
-      return { success: false, error: formatErrorMessage(error) };
-    }
+    const txHash = await this.blockchainApiService.registerViewingKey(client, viewingKey);
+    vaultData.viewingKeyRegistered = true;
+    this.logger.info(`Viewing key registered | vault:${vaultId} | tx:${txHash}`);
+    return { txHash };
   };
 
   /**
@@ -862,73 +979,71 @@ export class MainSDK {
    * @param contractAddress - SRC-20 contract address
    * @param note            - Optional label for the Fireblocks activity log
    */
+  /**
+   * @throws SdkApiError on failure
+   */
   public createShieldedTransaction = async (
     vaultId: string,
     recipient: string,
     amount: string,
     contractAddress: string,
     note?: string
-  ): Promise<CreateTransactionResponse> => {
-    try {
-      const vaultData = await this.ensureVaultData(vaultId);
-      const encryptionSk = await this.deriveEncryptionKey(vaultId);
+  ): Promise<{ txHash: string }> => {
+    const vaultData = await this.ensureVaultData(vaultId);
+    const encryptionSk = await this.deriveEncryptionKey(vaultId);
 
-      // Build a custom viem account backed by Fireblocks raw signing
-      // - address: the vault's address (0x6d7a...)
-      // - encryptionSk: used only for ECDH calldata encryption, not for signing
-      const fireblocksAccount = toAccount({
-        address: vaultData.address as Address,
-        signMessage: async () => {
-          throw new Error("signMessage not supported for Fireblocks account");
-        },
-        signTypedData: async () => {
-          throw new Error("signTypedData not supported for Fireblocks account");
-        },
-        signTransaction: async (transaction, options) => {
-          const serialize = (options?.serializer ?? serializeTransaction) as (
-            tx: unknown,
-            sig?: unknown
-          ) => Hex;
-          const serialized = serialize(transaction);
-          const hash = keccak256(serialized);
-          const signedMsg = await this.fireblocksService.signTransaction(
-            hash.slice(2),
-            vaultId,
-            note || "src20-shielded-transfer"
-          );
-          const sig = signedMsg.signature;
-          if (!sig?.r || !sig?.s || sig.v === undefined) {
-            throw new Error("Incomplete signature from Fireblocks");
-          }
-          const r = `0x${sig.r.replace(/^0x/, "").padStart(64, "0")}` as Hex;
-          const s = `0x${sig.s.replace(/^0x/, "").padStart(64, "0")}` as Hex;
-          const v = BigInt(sig.v < 27 ? sig.v : sig.v - 27);
-          return serialize(transaction, { r, s, v });
-        },
-      });
+    // Build a custom viem account backed by Fireblocks raw signing
+    // - address: the vault's address (0x6d7a...)
+    // - encryptionSk: used only for ECDH calldata encryption, not for signing
+    const fireblocksAccount = toAccount({
+      address: vaultData.address as Address,
+      signMessage: async () => {
+        throw new SdkApiError("signMessage not supported for Fireblocks account", 400, "UNSUPPORTED_OPERATION", undefined, "MainSDK");
+      },
+      signTypedData: async () => {
+        throw new SdkApiError("signTypedData not supported for Fireblocks account", 400, "UNSUPPORTED_OPERATION", undefined, "MainSDK");
+      },
+      signTransaction: async (transaction, options) => {
+        const serialize = (options?.serializer ?? serializeTransaction) as (
+          tx: unknown,
+          sig?: unknown
+        ) => Hex;
+        const serialized = serialize(transaction);
+        const hash = keccak256(serialized);
+        const signedMsg = await this.fireblocksService.signTransaction(
+          hash.slice(2),
+          vaultId,
+          note || "src20-shielded-transfer"
+        );
+        const sig = signedMsg.signature;
+        if (!sig?.r || !sig?.s || sig.v === undefined) {
+          throw new SdkApiError("Incomplete signature from Fireblocks", 502, "SIGNATURE_INCOMPLETE", undefined, "MainSDK");
+        }
+        const r = `0x${sig.r.replace(/^0x/, "").padStart(64, "0")}` as Hex;
+        const s = `0x${sig.s.replace(/^0x/, "").padStart(64, "0")}` as Hex;
+        const v = BigInt(sig.v < 27 ? sig.v : sig.v - 27);
+        return serialize(transaction, { r, s, v });
+      },
+    });
 
-      const client = await this.blockchainApiService.createShieldedClient(
-        fireblocksAccount,
-        encryptionSk
-      );
+    const client = await this.blockchainApiService.createShieldedClient(
+      fireblocksAccount,
+      encryptionSk
+    );
 
-      const amountBigInt = parseUnits(amount, 18);
-      const txHash = await this.blockchainApiService.submitShieldedTransfer(
-        client,
-        contractAddress as Address,
-        recipient as Address,
-        amountBigInt
-      );
+    const amountBigInt = parseUnits(amount, 18);
+    const txHash = await this.blockchainApiService.submitShieldedTransfer(
+      client,
+      contractAddress as Address,
+      recipient as Address,
+      amountBigInt
+    );
 
-      this.logger.info(
-        `Shielded transfer submitted | vault:${vaultId} | txHash:${txHash}` +
-          (note ? ` | note:${note}` : "")
-      );
-      return { success: true, txHash };
-    } catch (error: unknown) {
-      this.logger.error(`Failed to create shielded transaction: ${formatErrorMessage(error)}`);
-      return { success: false, error: formatErrorMessage(error) };
-    }
+    this.logger.info(
+      `Shielded transfer submitted | vault:${vaultId} | txHash:${txHash}` +
+        (note ? ` | note:${note}` : "")
+    );
+    return { txHash };
   };
 
   /**

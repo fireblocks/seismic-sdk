@@ -1,6 +1,6 @@
 import axios from "axios";
 import { Logger } from "./index.js";
-import { SdkApiError } from "../types/index.js";
+import { RateLimitError, SdkApiError } from "../types/index.js";
 
 export class ErrorHandler {
   constructor(
@@ -41,6 +41,18 @@ export class ErrorHandler {
         error.response?.statusText ||
         error.message ||
         `Error ${context}`;
+
+      if (status === 429) {
+        const retryAfterHeader = error.response?.headers?.["retry-after"];
+        let retryAfterMs: number | undefined;
+        if (retryAfterHeader) {
+          const seconds = Number(retryAfterHeader);
+          retryAfterMs = isNaN(seconds)
+            ? new Date(retryAfterHeader).getTime() - Date.now()
+            : seconds * 1000;
+        }
+        throw new RateLimitError(message, retryAfterMs);
+      }
 
       return new SdkApiError(message, status, data?.type, data?.info, this.serviceName);
     }

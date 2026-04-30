@@ -1,21 +1,15 @@
 // Utility functions and helpers
 
-import fs, { readFileSync } from "fs";
+import { readFileSync } from "fs";
 import { BasePath } from "@fireblocks/ts-sdk";
-import { isAddress } from "viem";
-import {
-  FireblocksConfig,
-  GetFtBalancesResponse,
-  GetNativeBalanceResponse,
-  TokenType,
-  TransactionType,
-} from "../types/index.js";
+import { isAddress, parseUnits } from "viem";
+import { FireblocksConfig, TokenType, TransactionType } from "../types/index.js";
 import { config, chain_info } from "./index.js";
 
 interface BalanceChecker {
   getBlockchainApiService(): { estimateTxFee(): Promise<number> };
-  getFtBalances(vaultId: string): Promise<GetFtBalancesResponse>;
-  getNativeBalance(vaultId: string): Promise<GetNativeBalanceResponse>;
+  getFtBalances(vaultId: string): Promise<{ token: TokenType; balance: number }[]>;
+  getNativeBalance(vaultId: string): Promise<number>;
 }
 
 // Returns credentials for Fireblocks SDK initialization
@@ -33,8 +27,7 @@ export const getFinalFireblocksSDKParams = (
         ? readFileSync(fireblocksConfig.apiSecret, "utf8")
         : fireblocksConfig.apiSecret;
   } else {
-    const secretKeyPath = process.env.FIREBLOCKS_API_USER_SECRET_KEY_PATH || "";
-    privateKey = fs.readFileSync(secretKeyPath, "utf8");
+    privateKey = config.FIREBLOCKS.secretKey ?? "";
   }
 
   const apiKey: string = fireblocksConfig?.apiKey ?? config.FIREBLOCKS.apiKey ?? "";
@@ -106,15 +99,6 @@ export const checkParamsAndAdjustAmount = async (
       fee = await sdk.getBlockchainApiService().estimateTxFee();
     }
 
-    const balanceResponse =
-      type == TransactionType.FungibleToken
-        ? await sdk.getFtBalances(vaultAccountId)
-        : await sdk.getNativeBalance(vaultAccountId);
-
-    if (!balanceResponse.success) {
-      throw new Error(`Could not fetch account balance to check funds sufficiency`);
-    }
-
     // if its a gross STX transfer, deduct fee from transferred amount
     if (type == TransactionType.Native && grossTransaction) {
       numAmount -= fee;
@@ -126,14 +110,12 @@ export const checkParamsAndAdjustAmount = async (
       }
     }
 
-    let balance;
-    // to do : check amount against balance
+    let balance: number | undefined;
     if (type == TransactionType.FungibleToken) {
-      balance = (balanceResponse as GetFtBalancesResponse).data?.find(
-        (b) => b.token === token
-      )?.balance;
+      const balances = await sdk.getFtBalances(vaultAccountId);
+      balance = balances.find((b) => b.token === token)?.balance;
     } else {
-      balance = (balanceResponse as GetNativeBalanceResponse).balance;
+      balance = await sdk.getNativeBalance(vaultAccountId);
     }
 
     if (balance === undefined) {
@@ -200,8 +182,7 @@ export const validateAddress = (address: string): boolean => {
 
 // Converts ETH (human-readable) to wei (10^18 smallest units)
 export const coinToUnits = (amount: number | string): bigint => {
-  const n = typeof amount === "string" ? parseFloat(amount) : amount;
-  return BigInt(Math.round(n * 10 ** chain_info.coinDecimals));
+  return parseUnits(String(amount), chain_info.coinDecimals);
 };
 
 // Converts wei back to ETH (human-readable)
@@ -215,8 +196,7 @@ export const ftToUnits = (
   _token: TokenType,
   decimals: number = 18
 ): bigint => {
-  const n = typeof amount === "string" ? parseFloat(amount) : amount;
-  return BigInt(Math.round(n * 10 ** decimals));
+  return parseUnits(String(amount), decimals);
 };
 
 const safeStringify = (obj: unknown): string => {

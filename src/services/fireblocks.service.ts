@@ -1,7 +1,6 @@
 import { Fireblocks, SignedMessage, TransactionRequest } from "@fireblocks/ts-sdk";
 import { FireblocksSigner } from "./fireblocksSigner.js";
-import { FireblocksConfig } from "../types/index.js";
-import { SdkApiError } from "../types/errors.js";
+import { FireblocksConfig, SdkApiError } from "../types/index.js";
 import {
   Logger,
   getPublicKeyForDerivationPathAndAlgorithm,
@@ -84,7 +83,13 @@ export class FireblocksService {
   public getPublicKeyByVaultID = async (vaultID: string | number): Promise<string> => {
     const id = typeof vaultID === "string" ? Number(vaultID) : vaultID;
     if (!Number.isInteger(id) || id < 0) {
-      throw new Error("vaultID must be a valid non-negative integer.");
+      throw new SdkApiError(
+        "vaultID must be a valid non-negative integer.",
+        400,
+        "INVALID_VAULT_ID",
+        undefined,
+        "FireblocksService"
+      );
     }
 
     try {
@@ -96,7 +101,14 @@ export class FireblocksService {
 
       return publicKey;
     } catch (error: unknown) {
-      throw new Error(`Failed to get public key by vault ID: ${formatErrorMessage(error)}`);
+      if (error instanceof SdkApiError) throw error;
+      throw new SdkApiError(
+        `Failed to get public key by vault ID: ${formatErrorMessage(error)}`,
+        500,
+        "GET_PUBLIC_KEY_FAILED",
+        undefined,
+        "FireblocksService"
+      );
     }
   };
 
@@ -175,7 +187,14 @@ export class FireblocksService {
       );
 
       const txId = transactionResponse.data.id;
-      if (!txId) throw new Error("Transaction ID is undefined.");
+      if (!txId)
+        throw new SdkApiError(
+          "Transaction ID is undefined.",
+          500,
+          "TX_ID_MISSING",
+          undefined,
+          "FireblocksService"
+        );
 
       const completedTx = await getTxStatus(txId, this.fireblocksSDK);
       const signatureData = completedTx.signedMessages?.[0];
@@ -285,16 +304,25 @@ export class FireblocksService {
       const publicKey = response.data.publicKey;
 
       if (!publicKey) {
-        throw new Error(
-          `Error fetching public key for vault account ${vaultAccountId} on ${assetId}`
+        throw new SdkApiError(
+          `Error fetching public key for vault account ${vaultAccountId} on ${assetId}`,
+          404,
+          "PUBLIC_KEY_NOT_FOUND",
+          undefined,
+          "FireblocksService"
         );
       }
 
       return publicKey;
     } catch (error: unknown) {
+      if (error instanceof SdkApiError) throw error;
       const message = error instanceof Error ? error.message : "Unknown error";
-      throw new Error(
-        `Failed to get public key for vault account ${vaultAccountId} on ${assetId}: ${message}`
+      throw new SdkApiError(
+        `Failed to get public key for vault account ${vaultAccountId} on ${assetId}: ${message}`,
+        500,
+        "GET_ASSET_PUBLIC_KEY_FAILED",
+        undefined,
+        "FireblocksService"
       );
     }
   };
@@ -303,7 +331,6 @@ export class FireblocksService {
    * Signs a transaction with the given vault account ID using the Fireblocks SDK and Fireblocks-signer.
    *
    * This method prepares and sends a transaction from the specified sender to the recipient
-   * // descripe parameters
    * @param content - The content of the transaction to sign.
    * @param vaultAccountId - The Fireblocks vault account ID as a string or number.
    * @param txNote - An optional note for the transaction.

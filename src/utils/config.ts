@@ -1,9 +1,25 @@
 import { readFileSync } from "fs";
 import { BasePath } from "@fireblocks/ts-sdk";
-import dotenv from "dotenv";
 import { getPackageName } from "./index.js";
 import { Config, CustomConfig } from "../types/index.js";
 import { Logger } from "./logger.js";
+
+/**
+ * SDK Configuration Management
+ *
+ * IMPORTANT for library consumers: If you use environment variables (e.g., from a .env file),
+ * you MUST call `dotenv.config()` BEFORE accessing any config via getConfig() or the config Proxy.
+ * This library does not call dotenv.config() - it's the consumer's responsibility.
+ *
+ * Example:
+ * ```typescript
+ * import dotenv from 'dotenv';
+ * dotenv.config(); // Must be called before SDK usage
+ *
+ * import { getConfig } from './utils/config';
+ * const cfg = getConfig();
+ * ```
+ */
 
 const logger = new Logger("utils:config");
 
@@ -35,8 +51,6 @@ const validateBasePath = (basePath: string): BasePath => {
 };
 
 const loadConfigFromEnv = (): Config => {
-  dotenv.config();
-
   return {
     PORT: Number(process.env.PORT) || 8000,
     FIREBLOCKS: {
@@ -46,6 +60,8 @@ const loadConfigFromEnv = (): Config => {
     },
     APP_NAME: getPackageName() || "Fireblocks SDK",
     TESTNET: process.env.NETWORK === "testnet",
+    RPC_URL: process.env.RPC_URL,
+    SOCIALSCAN_API_KEY: process.env.SOCIALSCAN_API_KEY,
   };
 };
 
@@ -59,6 +75,8 @@ const mergeConfig = (customConfig: CustomConfig): Config => {
     },
     APP_NAME: getPackageName() || "Fireblocks SDK",
     TESTNET: process.env.NETWORK === "testnet",
+    RPC_URL: process.env.RPC_URL,
+    SOCIALSCAN_API_KEY: process.env.SOCIALSCAN_API_KEY,
   };
 
   return {
@@ -70,6 +88,8 @@ const mergeConfig = (customConfig: CustomConfig): Config => {
     },
     APP_NAME: customConfig.APP_NAME ?? defaults.APP_NAME,
     TESTNET: customConfig.TESTNET ?? defaults.TESTNET,
+    RPC_URL: customConfig.RPC_URL ?? defaults.RPC_URL,
+    SOCIALSCAN_API_KEY: customConfig.SOCIALSCAN_API_KEY ?? defaults.SOCIALSCAN_API_KEY,
   };
 };
 
