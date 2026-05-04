@@ -89,11 +89,17 @@ export class TransactionHistoryService {
       );
 
       if (type === "native") {
-        const transactions = await explorer.getNativeTransactions(address, limit, offset);
+        const transactions = await explorer.getNativeTransactions(
+          address,
+          limit,
+          offset,
+          fromBlock,
+          toBlock
+        );
         return {
           transactions,
-          fromBlock: "0",
-          toBlock: "latest",
+          fromBlock: fromBlock ?? "0",
+          toBlock: toBlock ?? "latest",
           source: "socialscan-txlist",
           total: transactions.length,
           warning: dateOutOfRangeWarning,
@@ -113,8 +119,8 @@ export class TransactionHistoryService {
           after,
         };
         const [native, erc20, src20Result] = await Promise.allSettled([
-          explorer.getNativeTransactions(address, limit, offset),
-          explorer.getErc20Transactions(address, contracts?.[0], limit, offset),
+          explorer.getNativeTransactions(address, limit, offset, fromBlock, toBlock),
+          explorer.getErc20Transactions(address, contracts?.[0], limit, offset, fromBlock, toBlock),
           this.getTransactionHistory(src20Params),
         ]);
         const nativeTxs = native.status === "fulfilled" ? native.value : [];
@@ -126,8 +132,8 @@ export class TransactionHistoryService {
         const allPage = merged.slice(0, limit);
         return {
           transactions: allPage,
-          fromBlock: "0",
-          toBlock: "latest",
+          fromBlock: fromBlock ?? "0",
+          toBlock: toBlock ?? "latest",
           source: "socialscan-txlist+tokentx+eth_getLogs",
           total: merged.length,
           warning: dateOutOfRangeWarning,
@@ -140,12 +146,14 @@ export class TransactionHistoryService {
             address,
             contracts?.[0],
             limit,
-            offset
+            offset,
+            fromBlock,
+            toBlock
           );
           return {
             transactions,
-            fromBlock: "0",
-            toBlock: "latest",
+            fromBlock: fromBlock ?? "0",
+            toBlock: toBlock ?? "latest",
             source: "socialscan-tokentx",
             total: transactions.length,
             warning: dateOutOfRangeWarning,
