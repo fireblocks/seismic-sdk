@@ -169,33 +169,6 @@ export const configureRouter = (sdk: MainSDK): Router => {
 
   /**
    * @openapi
-   * /api/{vaultId}/erc20-balances:
-   *   get:
-   *     tags: [Balance]
-   *     summary: Get plaintext ERC-20 balances for a list of contracts
-   *     parameters:
-   *       - in: path
-   *         name: vaultId
-   *         required: true
-   *         schema:
-   *           type: string
-   *       - in: query
-   *         name: contracts
-   *         required: true
-   *         style: form
-   *         explode: true
-   *         schema:
-   *           type: array
-   *           items:
-   *             type: string
-   *     responses:
-   *       200:
-   *         description: ERC-20 balances
-   *       400:
-   *         description: Invalid parameters
-   */
-  /**
-   * @openapi
    * /api/{vaultId}/token-balances:
    *   get:
    *     tags: [Balance]
@@ -337,6 +310,18 @@ export const configureRouter = (sdk: MainSDK): Router => {
    *           type: string
    *         description: Comma-separated contract addresses to filter by. Required for type=src20.
    *       - in: query
+   *         name: before
+   *         schema:
+   *           type: string
+   *           example: "2026-05-04"
+   *         description: Return transactions on or before this date (YYYY-MM-DD). Overrides toBlock.
+   *       - in: query
+   *         name: after
+   *         schema:
+   *           type: string
+   *           example: "2026-01-29"
+   *         description: Return transactions on or after this date (YYYY-MM-DD). Overrides fromBlock.
+   *       - in: query
    *         name: limit
    *         schema:
    *           type: integer
@@ -465,9 +450,9 @@ export const configureRouter = (sdk: MainSDK): Router => {
    *                 description: Destination Fireblocks vault ID. Its Seismic address is resolved automatically. Mutually exclusive with recipient.
    *                 example: "1"
    *               amount:
-   *                 type: number
-   *                 description: Amount to transfer in whole units (e.g. 0.5 for 0.5 ETH)
-   *                 example: 0.5
+   *                 type: string
+   *                 description: Amount to transfer in whole units as a string (e.g. "0.5" for 0.5 ETH)
+   *                 example: "0.5"
    *               contractAddress:
    *                 type: string
    *                 description: Token contract address. Required for ERC20 and SRC20 transfers.
@@ -484,29 +469,29 @@ export const configureRouter = (sdk: MainSDK): Router => {
    *               value:
    *                 type: ETH
    *                 recipient: "0xd07afc9df1333f577ee83f92250dc854b227720f"
-   *                 amount: 0.5
+   *                 amount: "0.5"
    *             ETH to vault:
    *               value:
    *                 type: ETH
    *                 destinationVaultId: "1"
-   *                 amount: 0.5
+   *                 amount: "0.5"
    *             ERC20 to address:
    *               value:
    *                 type: ERC20
    *                 recipient: "0xd07afc9df1333f577ee83f92250dc854b227720f"
-   *                 amount: 10
+   *                 amount: "10"
    *                 contractAddress: "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238"
    *             ERC20 to vault:
    *               value:
    *                 type: ERC20
    *                 destinationVaultId: "1"
-   *                 amount: 10
+   *                 amount: "10"
    *                 contractAddress: "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238"
    *             SRC20 shielded to vault:
    *               value:
    *                 type: SRC20
    *                 destinationVaultId: "1"
-   *                 amount: 5
+   *                 amount: "5"
    *                 contractAddress: "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238"
    *     responses:
    *       200:

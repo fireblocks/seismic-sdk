@@ -25,7 +25,7 @@ export const getSwaggerSpec = (): ReturnType<typeof swaggerJsdoc> => {
         info: {
           title: `${config.APP_NAME} SDK API`,
           version: packageJson.version,
-          description: `API documentation for ${config.APP_NAME} SDK`,
+          description: `REST API for integrating Fireblocks MPC wallets with the Seismic privacy-preserving blockchain. Supports native ETH, ERC-20, and SRC-20 shielded token operations.`,
         },
         servers: [
           {
@@ -35,21 +35,20 @@ export const getSwaggerSpec = (): ReturnType<typeof swaggerJsdoc> => {
         ],
         tags: [
           { name: "Health", description: "Service health check" },
-          { name: "Contracts", description: "ERC-20 contract metadata" },
-          {
-            name: "Balance",
-            description: "Query balances by address",
-          },
+          { name: "Vault", description: "Vault address and public key" },
+          { name: "Balance", description: "Native and token balances" },
+          { name: "SRC-20", description: "Seismic SRC-20 viewing key registration and status" },
           {
             name: "Transfers",
-            description:
-              "Initiate and track asset transfers between vault accounts and external addresses",
+            description: "Submit ETH, ERC-20, or SRC-20 (shielded) transfers",
           },
           {
             name: "Transaction History",
-            description: "Retrieve past transaction records and details",
+            description: "Transfer event history with optional decrypted SRC-20 amounts",
           },
-          { name: "Vault", description: "Vault account management" },
+          { name: "Contracts", description: "ERC-20 token metadata" },
+          { name: "Explorer", description: "SocialScan Explorer API key validation" },
+          { name: "Metrics", description: "Prometheus metrics" },
         ],
       },
       apis: [

@@ -49,7 +49,7 @@ export class ApiController {
     const { vaultId } = req.params;
     try {
       const balance = await this.sdk.getNativeBalance(vaultId);
-      res.status(200).json({ success: true, balance });
+      res.status(200).json({ success: true, data: { vaultId, balance } });
     } catch (error) {
       this.handleError(error, res, "getNativeBalance");
     }
