@@ -42,7 +42,13 @@ export const validate = (config: ValidationConfig) => {
       }
       if (config.query) {
         const validatedQuery = await config.query.parseAsync(req.query);
-        (req.query as unknown) = { ...validatedQuery };
+        // Express defines req.query as a getter-only property; we need to shadow it with an own property to override it
+        Object.defineProperty(req, "query", {
+          value: { ...validatedQuery },
+          writable: true,
+          configurable: true,
+          enumerable: true,
+        });
       }
       if (config.body) {
         req.body = await config.body.parseAsync(req.body);

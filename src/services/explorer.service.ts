@@ -129,17 +129,21 @@ export class ExplorerService {
     needed: number,
     buildParams: (w: { startblock: string; endblock: string }) => Record<string, string>[],
     dedupeKey: (item: T) => string,
-    countFilter?: (item: T) => boolean
+    countFilter?: (item: T) => boolean,
+    startBlock?: number,
+    stopBlock?: number
   ): Promise<T[]> {
     const latest = await this.getLatestBlock();
+    const initialHi = startBlock !== undefined ? Math.min(startBlock, latest) : latest;
     const seen = new Set<string>();
     const collected: T[] = [];
     let consecutiveEmpty = 0;
 
     for (let i = 0; i < ExplorerService.MAX_WINDOWS; i++) {
-      const hi = latest - i * ExplorerService.WINDOW_SIZE;
+      const hi = initialHi - i * ExplorerService.WINDOW_SIZE;
       if (hi <= 0) break;
-      const lo = Math.max(0, hi - ExplorerService.WINDOW_SIZE + 1);
+      if (stopBlock !== undefined && hi < stopBlock) break;
+      const lo = Math.max(stopBlock ?? 0, hi - ExplorerService.WINDOW_SIZE + 1);
 
       const window = { startblock: String(lo), endblock: String(hi) };
       const results = await Promise.all(buildParams(window).map((p) => this.get<T>(p)));
@@ -201,9 +205,14 @@ export class ExplorerService {
   public getNativeTransactions = async (
     address: string,
     limit = 50,
-    offset = 0
+    offset = 0,
+    fromBlock?: string,
+    toBlock?: string
   ): Promise<Transaction[]> => {
     this.logger.debug(`Fetching native tx history | address:${address}`);
+
+    const startBlock = toBlock ? parseInt(toBlock, 16) : undefined;
+    const stopBlock = fromBlock ? parseInt(fromBlock, 16) : undefined;
 
     const all = await this.scanWindowsUntil<ExplorerTx>(
       offset + limit,
@@ -232,7 +241,9 @@ export class ExplorerService {
       (tx) => tx.hash,
       // Only count transactions where ETH actually moved (value > 0).
       // txlist returns all txs including shielded contract calls with value=0.
-      (tx) => BigInt(tx.value) > 0n
+      (tx) => BigInt(tx.value) > 0n,
+      startBlock,
+      stopBlock
     );
 
     all.sort((a, b) => parseInt(b.timeStamp) - parseInt(a.timeStamp));
@@ -265,9 +276,14 @@ export class ExplorerService {
     address: string,
     contractAddress?: string,
     limit = 50,
-    offset = 0
+    offset = 0,
+    fromBlock?: string,
+    toBlock?: string
   ): Promise<Transaction[]> => {
     this.logger.debug(`Fetching ERC-20 tx history | address:${address}`);
+
+    const startBlock = toBlock ? parseInt(toBlock, 16) : undefined;
+    const stopBlock = fromBlock ? parseInt(fromBlock, 16) : undefined;
 
     const all = await this.scanWindowsUntil<ExplorerTx>(
       offset + limit,
@@ -285,7 +301,10 @@ export class ExplorerService {
         if (contractAddress) p.contractaddress = contractAddress;
         return [p];
       },
-      (tx) => tx.hash
+      (tx) => tx.hash,
+      undefined,
+      startBlock,
+      stopBlock
     );
 
     all.sort((a, b) => parseInt(b.timeStamp) - parseInt(a.timeStamp));

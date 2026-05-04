@@ -30,7 +30,7 @@ export class RpcService {
   static readonly LOG_WINDOW_SIZE = 99_000;
   static readonly MAX_LOG_WINDOWS = 300;
   static readonly MAX_CONSECUTIVE_EMPTY_LOG_WINDOWS = 10;
-  static readonly DISCOVERY_WINDOWS = 50;
+  static readonly DISCOVERY_WINDOWS = 300;
   static readonly DISCOVERY_BATCH_SIZE = 10;
 
   constructor(opts: {
