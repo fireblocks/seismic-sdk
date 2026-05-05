@@ -333,7 +333,7 @@ export class FireblocksService {
    * This method prepares and sends a transaction from the specified sender to the recipient
    * @param content - The content of the transaction to sign.
    * @param vaultAccountId - The Fireblocks vault account ID as a string or number.
-   * @param txNote - An optional note for the transaction.
+   * @param purpose - An optional purpose for the signing operation (default: "sign-transaction").
    * @returns A promise that resolves to the signature when the transaction is successfully signed.
    * @throws {Error} If any parameter is invalid or if the transaction fails.
    **/

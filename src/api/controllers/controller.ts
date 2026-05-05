@@ -113,7 +113,7 @@ export class ApiController {
         limit: parsedLimit,
         offset: parsedOffset,
       });
-      const transactions = result.transactions;
+      const transactions = result.transactions.map(({ encryptedAmount: _, ...tx }) => tx);
       const total = result.total;
       res.status(200).json({
         success: true,

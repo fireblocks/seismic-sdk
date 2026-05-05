@@ -35,7 +35,7 @@ export const SEISMIC_CHAIN_ID = {
  */
 export const api_constants = {
   mainnet_rpc: "", // Seismic mainnet not yet live
-  testnet_rpc: "https://gcp-1.seismictest.net/rpc",
+  testnet_rpc: "https://testnet-1.seismictest.net/rpc",
 };
 
 /**

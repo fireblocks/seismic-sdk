@@ -19,13 +19,30 @@ Fireblocks vaults never expose raw private keys. This SDK bridges the gap:
 
 ## Quick Start
 
+### Local (Node.js)
+
 ```bash
 npm install
 cp .env.example .env   # fill in your Fireblocks credentials
 npm run dev            # watch build + auto-restart server
 ```
 
-The server starts on `http://localhost:8000` (configurable via `PORT`).
+### Docker
+
+```bash
+cp .env.example .env   # fill in your Fireblocks credentials
+docker build -t seismic-sdk .
+docker run -d \
+  --name seismic-sdk \
+  -p 8000:8000 \
+  --env-file .env \
+  -v $(pwd)/fireblocks_secret.key:/usr/src/app/fireblocks_secret.key:ro \
+  seismic-sdk
+```
+
+The server starts on `http://localhost:8000` (configurable via `PORT`).  
+Swagger UI: `http://localhost:8000/api-docs` (REST API endpoints)  
+TypeDoc: `http://localhost:8000/docs` (SDK library API docs — run `npm run docs` first)
 
 ---
 
@@ -36,7 +53,7 @@ The server starts on `http://localhost:8000` (configurable via `PORT`).
 | `FIREBLOCKS_API_USER_KEY`             | ✓        | Fireblocks API key                                                                                                                   |
 | `FIREBLOCKS_API_USER_SECRET_KEY_PATH` | ✓        | Path to Fireblocks RSA private key file                                                                                              |
 | `BASE_PATH`                           |          | `US` \| `EU` \| `SANDBOX` (default: `US`)                                                                                            |
-| `RPC_URL`                             |          | Seismic RPC endpoint (default: `https://gcp-1.seismictest.net/rpc`)                                                                  |
+| `RPC_URL`                             |          | Seismic RPC endpoint (defaults: testnet=`https://testnet-1.seismictest.net/rpc`, mainnet=pending)                                    |
 | `PORT`                                |          | HTTP server port (default: `8000`)                                                                                                   |
 | `LOG_LEVEL`                           |          | `DEBUG` \| `INFO` \| `WARN` \| `ERROR` \| `NONE` (case-insensitive, default: `INFO`)                                                 |
 | `SOCIALSCAN_API_KEY`                  |          | SocialScan Explorer API key - required for native ETH history. Get one at [developer.socialscan.io](https://developer.socialscan.io) |
@@ -332,7 +349,7 @@ npm start            # Run compiled server
 npm run typecheck    # Type-check without emitting
 npm run lint         # ESLint
 npm run format       # Prettier
-npm run docs         # Generate TypeDoc API docs → docs/
+npm run docs         # Generate TypeDoc API docs → served at http://localhost:8000/docs
 ```
 
 ---

@@ -8,7 +8,7 @@ import {
   getEncryption,
   AesGcmCrypto,
   encodeSeismicMetadataAsAAD,
-  seismicDevnet2,
+  seismicTestnet2,
   checkRegistration,
   shieldedWriteContract,
   DIRECTORY_ADDRESS,
@@ -128,7 +128,7 @@ export class SeismicShieldedService {
         : accountOrPrivateKey;
 
     const chain: Chain = {
-      ...seismicDevnet2,
+      ...seismicTestnet2,
       id: this.rpc.chainId,
       rpcUrls: { default: { http: [this.rpc.rpcUrl] } },
     };
@@ -150,7 +150,7 @@ export class SeismicShieldedService {
 
   createPublicClient(): SeismicPublicClient {
     const chain: Chain = {
-      ...seismicDevnet2,
+      ...seismicTestnet2,
       id: this.rpc.chainId,
       rpcUrls: { default: { http: [this.rpc.rpcUrl] } },
     };
