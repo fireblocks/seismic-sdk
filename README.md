@@ -41,7 +41,8 @@ docker run -d \
 ```
 
 The server starts on `http://localhost:8000` (configurable via `PORT`).  
-Swagger UI: `http://localhost:8000/api-docs`
+Swagger UI: `http://localhost:8000/api-docs` (REST API endpoints)  
+TypeDoc: `http://localhost:8000/docs` (SDK library API docs — run `npm run docs` first)
 
 ---
 
@@ -348,7 +349,7 @@ npm start            # Run compiled server
 npm run typecheck    # Type-check without emitting
 npm run lint         # ESLint
 npm run format       # Prettier
-npm run docs         # Generate TypeDoc API docs → docs/
+npm run docs         # Generate TypeDoc API docs → served at http://localhost:8000/docs
 ```
 
 ---
