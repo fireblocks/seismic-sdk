@@ -3,6 +3,7 @@ import { BasePath } from "@fireblocks/ts-sdk";
 import { getPackageName } from "./index.js";
 import { Config, CustomConfig } from "../types/index.js";
 import { Logger } from "./logger.js";
+import { api_constants } from "./constants.js";
 
 /**
  * SDK Configuration Management
@@ -50,6 +51,11 @@ const validateBasePath = (basePath: string): BasePath => {
   return (basePath as BasePath) || BasePath.US;
 };
 
+const getDefaultRpcUrl = (): string => {
+  const isTestnet = process.env.NETWORK !== "mainnet";
+  return isTestnet ? api_constants.testnet_rpc : api_constants.mainnet_rpc;
+};
+
 const loadConfigFromEnv = (): Config => {
   return {
     PORT: Number(process.env.PORT) || 8000,
@@ -60,7 +66,7 @@ const loadConfigFromEnv = (): Config => {
     },
     APP_NAME: getPackageName() || "Fireblocks SDK",
     TESTNET: process.env.NETWORK === "testnet",
-    RPC_URL: process.env.RPC_URL,
+    RPC_URL: process.env.RPC_URL || getDefaultRpcUrl(),
     SOCIALSCAN_API_KEY: process.env.SOCIALSCAN_API_KEY,
   };
 };
@@ -75,7 +81,7 @@ const mergeConfig = (customConfig: CustomConfig): Config => {
     },
     APP_NAME: getPackageName() || "Fireblocks SDK",
     TESTNET: process.env.NETWORK === "testnet",
-    RPC_URL: process.env.RPC_URL,
+    RPC_URL: process.env.RPC_URL || getDefaultRpcUrl(),
     SOCIALSCAN_API_KEY: process.env.SOCIALSCAN_API_KEY,
   };
 
