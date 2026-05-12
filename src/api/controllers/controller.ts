@@ -18,7 +18,7 @@ export class ApiController {
    * Returns the vault's Seismic/ETH address derived from its MPC public key.
    */
   public getAddress = async (req: Request, res: Response) => {
-    const { vaultId } = req.params;
+    const { vaultId } = req.params as Record<string, string>;
     try {
       const address = await this.sdk.getSeismicAddress(vaultId);
       res.status(200).json({ success: true, data: { vaultId, address } });
@@ -32,7 +32,7 @@ export class ApiController {
    * Returns the vault's compressed secp256k1 MPC public key.
    */
   public getPublicKey = async (req: Request, res: Response) => {
-    const { vaultId } = req.params;
+    const { vaultId } = req.params as Record<string, string>;
     try {
       const publicKey = await this.sdk.getVaultPublicKey(vaultId);
       res.status(200).json({ success: true, data: { vaultId, publicKey } });
@@ -46,7 +46,7 @@ export class ApiController {
    * Returns the vault's native ETH balance on Seismic.
    */
   public getNativeBalance = async (req: Request, res: Response) => {
-    const { vaultId } = req.params;
+    const { vaultId } = req.params as Record<string, string>;
     try {
       const balance = await this.sdk.getNativeBalance(vaultId);
       res.status(200).json({ success: true, data: { vaultId, balance } });
@@ -62,7 +62,7 @@ export class ApiController {
    * the response is always 200 with whatever succeeded, plus error fields for what failed.
    */
   public getTokenBalances = async (req: Request, res: Response) => {
-    const { vaultId } = req.params;
+    const { vaultId } = req.params as Record<string, string>;
     const { type, contracts: rawContracts } = req.query as {
       type?: string;
       contracts?: string | string[];
@@ -91,7 +91,7 @@ export class ApiController {
    * Returns ERC-20/SRC-20 Transfer event history for the vault's Seismic address.
    */
   public getTransactionHistory = async (req: Request, res: Response) => {
-    const { vaultId } = req.params;
+    const { vaultId } = req.params as Record<string, string>;
     const { type, fromBlock, toBlock, before, after, contracts, limit, offset } =
       req.query as Record<string, string>;
     try {
@@ -140,7 +140,7 @@ export class ApiController {
    * Returns a transaction by hash from the Seismic RPC.
    */
   public getTransaction = async (req: Request, res: Response) => {
-    const { txHash } = req.params;
+    const { txHash } = req.params as Record<string, string>;
     try {
       const data = await this.sdk.getTransactionByHash(txHash);
       if (!data) {
@@ -158,7 +158,7 @@ export class ApiController {
    * Submits an ETH, ERC-20, or SRC-20 (shielded) transfer.
    */
   public transfer = async (req: Request, res: Response) => {
-    const { vaultId } = req.params;
+    const { vaultId } = req.params as Record<string, string>;
     const { type, recipient, destinationVaultId, amount, contractAddress, decimals, note } =
       req.body as {
         type: "ETH" | "ERC20" | "SRC20";
@@ -225,7 +225,7 @@ export class ApiController {
    * One-time operation. After registration, Transfer events are encrypted to this key.
    */
   public registerViewingKey = async (req: Request, res: Response) => {
-    const { vaultId } = req.params;
+    const { vaultId } = req.params as Record<string, string>;
     try {
       const result = await this.sdk.registerViewingKey(vaultId);
       res.status(200).json({ success: true, txHash: result.txHash });
@@ -239,7 +239,7 @@ export class ApiController {
    * Returns whether the vault has a viewing key registered in the Seismic Directory.
    */
   public checkViewingKeyStatus = async (req: Request, res: Response) => {
-    const { vaultId } = req.params;
+    const { vaultId } = req.params as Record<string, string>;
     try {
       const registered = await this.sdk.checkViewingKeyRegistered(vaultId);
       res.status(200).json({ success: true, data: { vaultId, registered } });
@@ -253,7 +253,7 @@ export class ApiController {
    * Returns ERC-20 metadata: name, symbol, decimals, totalSupply.
    */
   public getContractInfo = async (req: Request, res: Response) => {
-    const { contractAddress } = req.params;
+    const { contractAddress } = req.params as Record<string, string>;
     try {
       const data = await this.sdk.getErc20Info(contractAddress);
       res.status(200).json({ success: true, data: { contractAddress, ...data } });
