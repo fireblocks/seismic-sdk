@@ -9,6 +9,7 @@ import {
   keccak256,
   serializeTransaction,
   parseUnits,
+  hashTypedData,
 } from "viem";
 import type { AxiosInstance } from "axios";
 import { toAccount } from "viem/accounts";
@@ -34,7 +35,6 @@ import {
   SEED_MESSAGE_HEX,
   ERC20_SELECTORS,
   DEFAULT_TOKEN_DECIMALS,
-  getConfig,
 } from "./utils/index.js";
 import { deriveKeyFromSignature } from "./crypto/key-derivation.js";
 import { buildBalanceReadMessage, createExpiry } from "./seismic/signature.js";
@@ -105,15 +105,21 @@ export class MainSDK {
       this.blockchainApiService =
         config.services?.blockchainApi ??
         new BlockchainApiService(config.testnet ?? false, {
-          rpcUrl: config.rpcUrl ?? getConfig().RPC_URL,
-          socialscanApiKey: config.socialscanApiKey ?? getConfig().SOCIALSCAN_API_KEY,
+          rpcUrl: config.rpcUrl,
+          socialscanApiKey: config.socialscanApiKey,
           httpClient: config.httpClient,
         });
       this.logger = config.logger ?? new Logger("MainSDK");
       this.logger.info("MainSDK initialized successfully");
     } catch (error) {
       if (error instanceof SdkApiError) throw error;
-      throw new SdkApiError(`Failed to initialize MainSDK: ${formatErrorMessage(error)}`, 500, "INIT_FAILED", undefined, "MainSDK");
+      throw new SdkApiError(
+        `Failed to initialize MainSDK: ${formatErrorMessage(error)}`,
+        500,
+        "INIT_FAILED",
+        undefined,
+        "MainSDK"
+      );
     }
   }
 
@@ -135,6 +141,70 @@ export class MainSDK {
     this.vaultData.set(vaultAccountId, entry);
     this.logger.debug(`Vault data cached for vault ${vaultAccountId}: address=${address}`);
     return entry;
+  }
+
+  private buildFireblocksAccount(address: Address, vaultId: string, purpose: string) {
+    return toAccount({
+      address,
+      signMessage: async () => {
+        throw new SdkApiError(
+          "signMessage not supported for Fireblocks account",
+          400,
+          "UNSUPPORTED_OPERATION",
+          undefined,
+          "MainSDK"
+        );
+      },
+      signTypedData: async (typedData) => {
+        const hash = hashTypedData(typedData as Parameters<typeof hashTypedData>[0]);
+        const signedMsg = await this.fireblocksService.signTransaction(
+          hash.slice(2),
+          vaultId,
+          purpose
+        );
+        const sig = signedMsg.signature;
+        if (!sig?.r || !sig?.s || sig.v === undefined) {
+          throw new SdkApiError(
+            "Incomplete signature from Fireblocks",
+            502,
+            "SIGNATURE_INCOMPLETE",
+            undefined,
+            "MainSDK"
+          );
+        }
+        const r = sig.r.replace(/^0x/, "").padStart(64, "0");
+        const s = sig.s.replace(/^0x/, "").padStart(64, "0");
+        const v = (sig.v < 27 ? sig.v + 27 : sig.v).toString(16).padStart(2, "0");
+        return `0x${r}${s}${v}` as Hex;
+      },
+      signTransaction: async (transaction, options) => {
+        const serialize = (options?.serializer ?? serializeTransaction) as (
+          tx: unknown,
+          sig?: unknown
+        ) => Hex;
+        const serialized = serialize(transaction);
+        const hash = keccak256(serialized);
+        const signedMsg = await this.fireblocksService.signTransaction(
+          hash.slice(2),
+          vaultId,
+          purpose
+        );
+        const sig = signedMsg.signature;
+        if (!sig?.r || !sig?.s || sig.v === undefined) {
+          throw new SdkApiError(
+            "Incomplete signature from Fireblocks",
+            502,
+            "SIGNATURE_INCOMPLETE",
+            undefined,
+            "MainSDK"
+          );
+        }
+        const r = `0x${sig.r.replace(/^0x/, "").padStart(64, "0")}` as Hex;
+        const s = `0x${sig.s.replace(/^0x/, "").padStart(64, "0")}` as Hex;
+        const v = BigInt(sig.v < 27 ? sig.v : sig.v - 27);
+        return serialize(transaction, { r, s, v });
+      },
+    });
   }
 
   /**
@@ -588,7 +658,13 @@ export class MainSDK {
 
       const sig = signedMsg.signature;
       if (!sig?.r || !sig?.s || sig.v === undefined) {
-        throw new SdkApiError("Incomplete signature from Fireblocks", 502, "SIGNATURE_INCOMPLETE", undefined, "MainSDK");
+        throw new SdkApiError(
+          "Incomplete signature from Fireblocks",
+          502,
+          "SIGNATURE_INCOMPLETE",
+          undefined,
+          "MainSDK"
+        );
       }
 
       const recoveryBit = sig.v < 27 ? sig.v : sig.v - 27;
@@ -610,12 +686,24 @@ export class MainSDK {
 
       const result = await this.blockchainApiService.broadcastTransaction(signedRlp);
       if (result.err) {
-        throw new SdkApiError(formatErrorMessage(result.err), 500, "BROADCAST_FAILED", undefined, "MainSDK");
+        throw new SdkApiError(
+          formatErrorMessage(result.err),
+          500,
+          "BROADCAST_FAILED",
+          undefined,
+          "MainSDK"
+        );
       }
       return { txHash: result.txid! };
     } catch (error) {
       if (error instanceof SdkApiError) throw error;
-      throw new SdkApiError(`Failed to create ERC-20 transaction: ${formatErrorMessage(error)}`, 500, "ERC20_TX_FAILED", undefined, "MainSDK");
+      throw new SdkApiError(
+        `Failed to create ERC-20 transaction: ${formatErrorMessage(error)}`,
+        500,
+        "ERC20_TX_FAILED",
+        undefined,
+        "MainSDK"
+      );
     }
   };
 
@@ -747,7 +835,10 @@ export class MainSDK {
             this.blockchainApiService.getErc20Info(contractAddress),
           ]);
           const balance = balanceResult.status === "fulfilled" ? balanceResult.value : 0;
-          const info = infoResult.status === "fulfilled" ? infoResult.value : {} as { name?: string | null; symbol?: string | null; decimals?: number | null };
+          const info =
+            infoResult.status === "fulfilled"
+              ? infoResult.value
+              : ({} as { name?: string | null; symbol?: string | null; decimals?: number | null });
           return {
             contractAddress,
             name: info.name ?? null,
@@ -799,7 +890,14 @@ export class MainSDK {
     );
 
     const fullSig = signedMsg.signature?.fullSig;
-    if (!fullSig) throw new SdkApiError(`Fireblocks did not return a signature for vault ${vaultId}`, 502, "SIGNATURE_MISSING", undefined, "MainSDK");
+    if (!fullSig)
+      throw new SdkApiError(
+        `Fireblocks did not return a signature for vault ${vaultId}`,
+        502,
+        "SIGNATURE_MISSING",
+        undefined,
+        "MainSDK"
+      );
 
     const encryptionSk = deriveKeyFromSignature(fullSig);
     vaultData.encryptionSk = encryptionSk;
@@ -827,10 +925,7 @@ export class MainSDK {
    * @returns Balance in whole token units (wei / 1e18)
    * @throws SdkApiError on failure
    */
-  public getSrc20Balance = async (
-    vaultId: string,
-    contractAddress: string
-  ): Promise<number> => {
+  public getSrc20Balance = async (vaultId: string, contractAddress: string): Promise<number> => {
     const { address } = await this.ensureVaultData(vaultId);
     const ownerAddress = address as Address;
     const expiry = createExpiry();
@@ -845,7 +940,13 @@ export class MainSDK {
     // Pack r/s/v into 65-byte Ethereum signature (ecrecover format)
     const sig = signedMsg.signature;
     if (!sig?.r || !sig?.s || sig.v === undefined) {
-      throw new SdkApiError("Incomplete signature from Fireblocks (missing r, s, or v)", 502, "SIGNATURE_INCOMPLETE", undefined, "MainSDK");
+      throw new SdkApiError(
+        "Incomplete signature from Fireblocks (missing r, s, or v)",
+        502,
+        "SIGNATURE_INCOMPLETE",
+        undefined,
+        "MainSDK"
+      );
     }
     const v = sig.v < 27 ? sig.v + 27 : sig.v;
     const rPadded = pad(`0x${sig.r.replace(/^0x/, "")}` as Hex, { size: 32 });
@@ -903,36 +1004,11 @@ export class MainSDK {
     const encryptionSk = await this.deriveEncryptionKey(vaultId);
     const viewingKey = await this.deriveViewingKey(vaultId);
 
-    const fireblocksAccount = toAccount({
-      address: vaultData.address as Address,
-      signMessage: async () => {
-        throw new SdkApiError("signMessage not supported for Fireblocks account", 400, "UNSUPPORTED_OPERATION", undefined, "MainSDK");
-      },
-      signTypedData: async () => {
-        throw new SdkApiError("signTypedData not supported for Fireblocks account", 400, "UNSUPPORTED_OPERATION", undefined, "MainSDK");
-      },
-      signTransaction: async (transaction, options) => {
-        const serialize = (options?.serializer ?? serializeTransaction) as (
-          tx: unknown,
-          sig?: unknown
-        ) => Hex;
-        const serialized = serialize(transaction);
-        const hash = keccak256(serialized);
-        const signedMsg = await this.fireblocksService.signTransaction(
-          hash.slice(2),
-          vaultId,
-          "register-viewing-key"
-        );
-        const sig = signedMsg.signature;
-        if (!sig?.r || !sig?.s || sig.v === undefined) {
-          throw new SdkApiError("Incomplete signature from Fireblocks", 502, "SIGNATURE_INCOMPLETE", undefined, "MainSDK");
-        }
-        const r = `0x${sig.r.replace(/^0x/, "").padStart(64, "0")}` as Hex;
-        const s = `0x${sig.s.replace(/^0x/, "").padStart(64, "0")}` as Hex;
-        const v = BigInt(sig.v < 27 ? sig.v : sig.v - 27);
-        return serialize(transaction, { r, s, v });
-      },
-    });
+    const fireblocksAccount = this.buildFireblocksAccount(
+      vaultData.address as Address,
+      vaultId,
+      "register-viewing-key"
+    );
 
     const client = await this.blockchainApiService.createShieldedClient(
       fireblocksAccount,
@@ -992,39 +1068,11 @@ export class MainSDK {
     const vaultData = await this.ensureVaultData(vaultId);
     const encryptionSk = await this.deriveEncryptionKey(vaultId);
 
-    // Build a custom viem account backed by Fireblocks raw signing
-    // - address: the vault's address (0x6d7a...)
-    // - encryptionSk: used only for ECDH calldata encryption, not for signing
-    const fireblocksAccount = toAccount({
-      address: vaultData.address as Address,
-      signMessage: async () => {
-        throw new SdkApiError("signMessage not supported for Fireblocks account", 400, "UNSUPPORTED_OPERATION", undefined, "MainSDK");
-      },
-      signTypedData: async () => {
-        throw new SdkApiError("signTypedData not supported for Fireblocks account", 400, "UNSUPPORTED_OPERATION", undefined, "MainSDK");
-      },
-      signTransaction: async (transaction, options) => {
-        const serialize = (options?.serializer ?? serializeTransaction) as (
-          tx: unknown,
-          sig?: unknown
-        ) => Hex;
-        const serialized = serialize(transaction);
-        const hash = keccak256(serialized);
-        const signedMsg = await this.fireblocksService.signTransaction(
-          hash.slice(2),
-          vaultId,
-          note || "src20-shielded-transfer"
-        );
-        const sig = signedMsg.signature;
-        if (!sig?.r || !sig?.s || sig.v === undefined) {
-          throw new SdkApiError("Incomplete signature from Fireblocks", 502, "SIGNATURE_INCOMPLETE", undefined, "MainSDK");
-        }
-        const r = `0x${sig.r.replace(/^0x/, "").padStart(64, "0")}` as Hex;
-        const s = `0x${sig.s.replace(/^0x/, "").padStart(64, "0")}` as Hex;
-        const v = BigInt(sig.v < 27 ? sig.v : sig.v - 27);
-        return serialize(transaction, { r, s, v });
-      },
-    });
+    const fireblocksAccount = this.buildFireblocksAccount(
+      vaultData.address as Address,
+      vaultId,
+      note || "src20-shielded-transfer"
+    );
 
     const client = await this.blockchainApiService.createShieldedClient(
       fireblocksAccount,
