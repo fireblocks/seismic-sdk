@@ -48,17 +48,18 @@ TypeDoc: `http://localhost:8000/docs` (SDK library API docs — run `npm run doc
 
 ## Environment Variables
 
-| Variable                              | Required | Description                                                                                                                          |
-| ------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `FIREBLOCKS_API_USER_KEY`             | ✓        | Fireblocks API key                                                                                                                   |
-| `FIREBLOCKS_API_USER_SECRET_KEY_PATH` | ✓        | Path to Fireblocks RSA private key file                                                                                              |
-| `BASE_PATH`                           |          | `US` \| `EU` \| `SANDBOX` (default: `US`)                                                                                            |
-| `RPC_URL`                             |          | Seismic RPC endpoint (defaults: testnet=`https://testnet-1.seismictest.net/rpc`, mainnet=pending)                                    |
-| `PORT`                                |          | HTTP server port (default: `8000`)                                                                                                   |
-| `LOG_LEVEL`                           |          | `DEBUG` \| `INFO` \| `WARN` \| `ERROR` \| `NONE` (case-insensitive, default: `INFO`)                                                 |
-| `SOCIALSCAN_API_KEY`                  |          | SocialScan Explorer API key - required for native ETH history. Get one at [developer.socialscan.io](https://developer.socialscan.io) |
-| `HTTP_TIMEOUT`                        |          | HTTP client timeout in milliseconds (default: `30000`)                                                                               |
-| `HTTP_USER_AGENT`                     |          | HTTP `User-Agent` header (default: `@fireblocks/seismic-sdk/<version>`)                                                              |
+| Variable                              | Required | Description                                                                                                                                                       |
+| ------------------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `FIREBLOCKS_API_USER_KEY`             | ✓        | Fireblocks API key                                                                                                                                                |
+| `FIREBLOCKS_API_USER_SECRET_KEY_PATH` | ✓        | Path to Fireblocks RSA private key file                                                                                                                           |
+| `BASE_PATH`                           |          | `US` \| `EU` \| `SANDBOX` (default: `US`)                                                                                                                         |
+| `RPC_URL`                             |          | Seismic RPC endpoint (defaults: testnet=`https://testnet-1.seismictest.net/rpc`, mainnet=pending)                                                                 |
+| `PORT`                                |          | HTTP server port (default: `8000`)                                                                                                                                |
+| `LOG_LEVEL`                           |          | `DEBUG` \| `INFO` \| `WARN` \| `ERROR` \| `NONE` (case-insensitive, default: `INFO`)                                                                              |
+| `SKIP_DETERMINISM_CHECK`              |          | Skip deterministic signing verification at startup (default: `false`). Only set to `true` if you have confirmed your workspace has deterministic signing enabled. |
+| `SOCIALSCAN_API_KEY`                  |          | SocialScan Explorer API key - required for native ETH history. Get one at [developer.socialscan.io](https://developer.socialscan.io)                              |
+| `HTTP_TIMEOUT`                        |          | HTTP client timeout in milliseconds (default: `30000`)                                                                                                            |
+| `HTTP_USER_AGENT`                     |          | HTTP `User-Agent` header (default: `@fireblocks/seismic-sdk/<version>`)                                                                                           |
 
 ---
 
@@ -210,7 +211,8 @@ When `type=all`, each type is fetched in parallel and fails independently. If on
 import { MainSDK, createHttpClient } from "@fireblocks/seismic-sdk";
 import { BasePath } from "@fireblocks/ts-sdk";
 
-const sdk = new MainSDK({
+// Create and initialize the SDK with deterministic signing verification
+const sdk = await MainSDK.create({
   apiKey: process.env.FIREBLOCKS_API_USER_KEY!,
   apiSecret: process.env.FIREBLOCKS_API_USER_SECRET_KEY_PATH!,
   basePath: BasePath.US,
@@ -259,13 +261,15 @@ await sdk.shutdown();
 
 ### Session lifecycle
 
-1. **Vault init (lazy)** - on first use, `getPublicKeyByVaultID` fetches the vault's compressed secp256k1 public key from Fireblocks. The Seismic/ETH address is derived via `keccak256(uncompressed_pubkey)[last 20 bytes]` and cached in memory.
+1. **SDK initialization** - `MainSDK.create()` constructs the SDK instance then verifies your Fireblocks workspace supports deterministic signing by signing `SEED_MESSAGE_HEX` twice and comparing the results. If the signatures differ, the SDK fails to initialize with a `DETERMINISTIC_SIGNING_REQUIRED` error, as deterministic signing is required for stable encryption key derivation. This can be skipped with `skipDeterminismCheck: true` if you have confirmed your workspace has this feature enabled.
 
-2. **Encryption key derivation** - `deriveEncryptionKey(vaultId)` signs a fixed 32-byte seed (`keccak256("Seismic Fireblocks Encryption Key Derivation")`) via Fireblocks RAW signing, then computes `SHA-256(fullSig)` → 32-byte `encryptionSk`. Because Fireblocks MPC signatures are deterministic, the same key is re-derived on every session restart without re-approval. Stored in process memory only.
+2. **Vault init (lazy)** - on first use, `getPublicKeyByVaultID` fetches the vault's compressed secp256k1 public key from Fireblocks. The Seismic/ETH address is derived via `keccak256(uncompressed_pubkey)[last 20 bytes]` and cached in memory.
 
-3. **TEE session** - `seismic-viem`'s `createShieldedWalletClient` fetches the Seismic TEE public key once per client instance. `encryptionSk` is used for ECDH with the TEE to derive the AES-256-GCM calldata encryption key.
+3. **Encryption key derivation** - `deriveEncryptionKey(vaultId)` signs a fixed 32-byte seed (`keccak256("Seismic Fireblocks Encryption Key Derivation")`) via Fireblocks RAW signing, then computes `SHA-256(fullSig)` → 32-byte `encryptionSk`. Because Fireblocks MPC signatures are deterministic, the same key is re-derived on every session restart without re-approval. Stored in process memory only.
 
-4. **Shutdown** - `sdk.shutdown()` zeroes all `encryptionSk` and `viewingKey` values before clearing the vault cache.
+4. **TEE session** - `seismic-viem`'s `createShieldedWalletClient` fetches the Seismic TEE public key once per client instance. `encryptionSk` is used for ECDH with the TEE to derive the AES-256-GCM calldata encryption key.
+
+5. **Shutdown** - `sdk.shutdown()` zeroes all `encryptionSk` and `viewingKey` values before clearing the vault cache.
 
 ### SRC-20 balance reads
 

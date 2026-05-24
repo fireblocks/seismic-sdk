@@ -76,6 +76,8 @@ export interface MainSDKConfig extends FireblocksConfig {
     fireblocks?: FireblocksService;
     blockchainApi?: BlockchainApiService;
   };
+  /** Skip the deterministic signing check at startup. Only use if you are certain your workspace has deterministic signing enabled. */
+  skipDeterminismCheck?: boolean;
 }
 
 export class MainSDK {
@@ -83,6 +85,8 @@ export class MainSDK {
   private readonly blockchainApiService: BlockchainApiService;
   private readonly logger: Logger;
   private readonly vaultData: Map<string, VaultData> = new Map();
+  private readonly skipDeterminismCheck: boolean;
+  private deterministicSigningVerified: boolean | undefined;
 
   /**
    * Creates a new MainSDK instance.
@@ -110,6 +114,8 @@ export class MainSDK {
           httpClient: config.httpClient,
         });
       this.logger = config.logger ?? new Logger("MainSDK");
+      this.skipDeterminismCheck = config.skipDeterminismCheck ?? false;
+      this.deterministicSigningVerified = this.skipDeterminismCheck ? true : undefined;
       this.logger.info("MainSDK initialized successfully");
     } catch (error) {
       if (error instanceof SdkApiError) throw error;
@@ -117,6 +123,61 @@ export class MainSDK {
         `Failed to initialize MainSDK: ${formatErrorMessage(error)}`,
         500,
         "INIT_FAILED",
+        undefined,
+        "MainSDK"
+      );
+    }
+  }
+
+  /**
+   * Creates a MainSDK instance and verifies that Fireblocks workspace supports deterministic signing.
+   * @param config - SDK configuration
+   * @returns Initialized SDK instance
+   * @throws SdkApiError if deterministic signing verification fails
+   */
+  static async create(config: MainSDKConfig): Promise<MainSDK> {
+    const sdk = new MainSDK(config);
+    if (!sdk.skipDeterminismCheck) {
+      await sdk.runDeterminismCheck("0");
+    }
+    return sdk;
+  }
+
+  private async runDeterminismCheck(vaultId: string): Promise<void> {
+    this.logger.info(`Running deterministic signing check | vault:${vaultId}`);
+    const sig1 = await this.fireblocksService.signTransaction(
+      SEED_MESSAGE_HEX.slice(2),
+      vaultId,
+      "determinism-check"
+    );
+    const sig2 = await this.fireblocksService.signTransaction(
+      SEED_MESSAGE_HEX.slice(2),
+      vaultId,
+      "determinism-check"
+    );
+    if (sig1.signature?.fullSig !== sig2.signature?.fullSig) {
+      this.deterministicSigningVerified = false;
+      throw new SdkApiError(
+        "Fireblocks workspace does not support deterministic signing. " +
+          "The SDK requires deterministic MPC signatures to derive a stable encryption key. " +
+          "Enable 'Deterministic Signing' in your Fireblocks workspace settings, " +
+          "or set skipDeterminismCheck: true in the SDK config to bypass this guard.",
+        500,
+        "DETERMINISTIC_SIGNING_REQUIRED",
+        undefined,
+        "MainSDK"
+      );
+    }
+    this.deterministicSigningVerified = true;
+    this.logger.info(`Deterministic signing verified | vault:${vaultId}`);
+  }
+
+  private assertDeterministicSigning(): void {
+    if (this.deterministicSigningVerified === false) {
+      throw new SdkApiError(
+        "SDK is blocked: Fireblocks workspace does not support deterministic signing.",
+        500,
+        "DETERMINISTIC_SIGNING_REQUIRED",
         undefined,
         "MainSDK"
       );
@@ -264,6 +325,9 @@ export class MainSDK {
     total: number;
     warning?: string;
   }> {
+    if (params.type === "src20" || params.type === "all") {
+      this.assertDeterministicSigning();
+    }
     const vaultData = await this.ensureVaultData(params.vaultId);
 
     let encryptionSk: Hex | undefined;
@@ -879,6 +943,7 @@ export class MainSDK {
    * The encryptionSk is held in process memory only and zeroed on shutdown.
    */
   public deriveEncryptionKey = async (vaultId: string): Promise<Hex> => {
+    this.assertDeterministicSigning();
     const vaultData = await this.ensureVaultData(vaultId);
     if (vaultData.encryptionSk) return vaultData.encryptionSk as Hex;
 
@@ -926,6 +991,7 @@ export class MainSDK {
    * @throws SdkApiError on failure
    */
   public getSrc20Balance = async (vaultId: string, contractAddress: string): Promise<number> => {
+    this.assertDeterministicSigning();
     const { address } = await this.ensureVaultData(vaultId);
     const ownerAddress = address as Address;
     const expiry = createExpiry();
@@ -1000,6 +1066,7 @@ export class MainSDK {
    * @throws SdkApiError on failure
    */
   public registerViewingKey = async (vaultId: string): Promise<{ txHash: string }> => {
+    this.assertDeterministicSigning();
     const vaultData = await this.ensureVaultData(vaultId);
     const encryptionSk = await this.deriveEncryptionKey(vaultId);
     const viewingKey = await this.deriveViewingKey(vaultId);
@@ -1065,6 +1132,7 @@ export class MainSDK {
     contractAddress: string,
     note?: string
   ): Promise<{ txHash: string }> => {
+    this.assertDeterministicSigning();
     const vaultData = await this.ensureVaultData(vaultId);
     const encryptionSk = await this.deriveEncryptionKey(vaultId);
 
