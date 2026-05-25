@@ -7,7 +7,7 @@ import { FireblocksConfig, TokenType, TransactionType } from "../types/index.js"
 import { config, chain_info } from "./index.js";
 
 interface BalanceChecker {
-  getBlockchainApiService(): { estimateTxFee(): Promise<number> };
+  estimateTxFee(): Promise<number>;
   getFtBalances(vaultId: string): Promise<{ token: TokenType; balance: number }[]>;
   getNativeBalance(vaultId: string): Promise<number>;
 }
@@ -96,7 +96,7 @@ export const checkParamsAndAdjustAmount = async (
     let fee = 0;
 
     if (type == TransactionType.Native) {
-      fee = await sdk.getBlockchainApiService().estimateTxFee();
+      fee = await sdk.estimateTxFee();
     }
 
     // if its a gross STX transfer, deduct fee from transferred amount

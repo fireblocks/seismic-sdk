@@ -365,7 +365,8 @@ export class BlockchainApiService {
       ]);
 
       const nonce = parseInt(hexNonce, 16);
-      const gasPrice = BigInt(hexGasPrice);
+      const baseGasPrice = BigInt(hexGasPrice);
+      const gasPrice = (baseGasPrice * 120n) / 100n;
 
       const evmTxFields = {
         from: sender,

@@ -372,22 +372,10 @@ export class MainSDK {
     return this.fireblocksService;
   }
 
-  /**
-   * @deprecated Inject via MainSDKConfig.services for testing; direct access will be removed in a future major version.
-   */
-  public getBlockchainApiService(): BlockchainApiService {
-    this.logger.warn(
-      "getBlockchainApiService() is deprecated and will be removed in a future version."
-    );
-    return this.blockchainApiService;
-  }
+  public estimateTxFee = async (): Promise<number> => {
+    return this.blockchainApiService.estimateTxFee();
+  };
 
-  /**
-   * Retrieves the native coin balance for a vault account address.
-   *
-   * @param vaultAccountId - The Fireblocks vault account ID
-   * @returns A promise that resolves to a {GetNativeBalanceResponse}
-   */
   /**
    * Retrieves the native coin balance for a vault account address.
    * @param vaultAccountId - The Fireblocks vault account ID
