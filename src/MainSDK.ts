@@ -18,6 +18,7 @@ import { FireblocksService } from "./services/fireblocks.service.js";
 import { BlockchainApiService } from "./services/seismic.service.js";
 import {
   FireblocksConfig,
+  TokenBalance,
   TokenBalancesResult,
   TokenType,
   Transaction,
@@ -288,13 +289,13 @@ export class MainSDK {
    * @returns Token metadata object
    * @throws SdkApiError on failure
    */
-  public async getErc20Info(contractAddress: string): Promise<{
+  public async getTokenInfo(contractAddress: string): Promise<{
     name: string | null;
     symbol: string | null;
     decimals: number | null;
     totalSupply: string | null;
   }> {
-    return this.blockchainApiService.getErc20Info(contractAddress);
+    return this.blockchainApiService.getTokenInfo(contractAddress);
   }
 
   /**
@@ -399,9 +400,7 @@ export class MainSDK {
    */
   public getSUsdcBalance = async (vaultAccountId: string): Promise<string> => {
     this.logger.debug(`Fetching sUSDC balance for vault ${vaultAccountId}`);
-    const { address } = await this.ensureVaultData(vaultAccountId);
-    const raw = await this.blockchainApiService.readErc20Balance(address, SUSDC_CONTRACT_ADDRESS);
-    return formatUnits(raw, SUSDC_DECIMALS);
+    return this.getSrc20Balance(vaultAccountId, SUSDC_CONTRACT_ADDRESS, SUSDC_DECIMALS);
   };
 
   /**
@@ -480,7 +479,7 @@ export class MainSDK {
           undefined,
           "MainSDK"
         );
-      return this.createShieldedTransaction(vaultId, to, amount, contractAddress, note);
+      return this.createShieldedTransaction(vaultId, to, amount, contractAddress, decimals, note);
     }
     if (type === "ERC20") {
       if (!contractAddress)
@@ -513,7 +512,7 @@ export class MainSDK {
     amount: string,
     note?: string
   ): Promise<{ txHash: string }> => {
-    return this.createErc20Transaction(
+    return this.createShieldedTransaction(
       vaultAccountId,
       recipientAddress,
       amount,
@@ -551,7 +550,7 @@ export class MainSDK {
 
       const resolvedDecimals =
         decimals ??
-        (await this.blockchainApiService.getErc20Info(contractAddress)).decimals ??
+        (await this.blockchainApiService.getTokenInfo(contractAddress)).decimals ??
         DEFAULT_TOKEN_DECIMALS;
       const amountWei = parseUnits(amount, resolvedDecimals);
 
@@ -737,7 +736,7 @@ export class MainSDK {
             try {
               const [raw, info] = await Promise.all([
                 this.blockchainApiService.readErc20Balance(address, contractAddress),
-                this.blockchainApiService.getErc20Info(contractAddress),
+                this.blockchainApiService.getTokenInfo(contractAddress),
               ]);
               const decimals = info.decimals ?? 18;
               return {
@@ -765,22 +764,27 @@ export class MainSDK {
       return this.blockchainApiService.getAllTokenBalances(address);
     };
 
-    const fetchSrc20 = async () => {
-      const contractList = contracts?.length
+    const fetchSrc20 = async (excludeContracts: string[] = []) => {
+      let contractList = contracts?.length
         ? contracts
         : await this.blockchainApiService.discoverSrc20Contracts(address);
+      if (excludeContracts.length) {
+        const excluded = new Set(excludeContracts.map((c) => c.toLowerCase()));
+        contractList = contractList.filter((c) => !excluded.has(c.toLowerCase()));
+      }
       if (contractList.length === 0) return [];
       return Promise.all(
         contractList.map(async (contractAddress) => {
-          const [balanceResult, infoResult] = await Promise.allSettled([
-            this.getSrc20Balance(vaultId, contractAddress),
-            this.blockchainApiService.getErc20Info(contractAddress),
-          ]);
-          const balance = balanceResult.status === "fulfilled" ? balanceResult.value : "0";
-          const info =
-            infoResult.status === "fulfilled"
-              ? infoResult.value
-              : ({} as { name?: string | null; symbol?: string | null; decimals?: number | null });
+          const info = await this.blockchainApiService
+            .getTokenInfo(contractAddress)
+            .catch(
+              () =>
+                ({}) as { name?: string | null; symbol?: string | null; decimals?: number | null }
+            );
+          const decimals = info.decimals ?? 18;
+          const balance = await this.getSrc20Balance(vaultId, contractAddress, decimals).catch(
+            () => "0"
+          );
           return {
             contractAddress,
             name: info.name ?? null,
@@ -792,15 +796,33 @@ export class MainSDK {
       );
     };
 
+    const fetchSUSDC = async (): Promise<TokenBalance> => {
+      const balance = await this.getSrc20Balance(vaultId, SUSDC_CONTRACT_ADDRESS, SUSDC_DECIMALS);
+      return {
+        contractAddress: SUSDC_CONTRACT_ADDRESS,
+        name: "Shielded USD Coin",
+        symbol: "SUSDC",
+        decimals: SUSDC_DECIMALS,
+        balance,
+      };
+    };
+
     if (type === "erc20") {
       return { erc20: await fetchErc20() };
     }
     if (type === "src20") {
       return { src20: await fetchSrc20() };
     }
-    // type === "all": run in parallel, each fails independently
-    const [erc20, src20] = await Promise.allSettled([fetchErc20(), fetchSrc20()]);
+    // type === "all": sUSDC + ERC-20 + SRC-20 in parallel, each fails independently.
+    const [sUSDC, erc20, src20] = await Promise.allSettled([
+      fetchSUSDC(),
+      fetchErc20(),
+      fetchSrc20([SUSDC_CONTRACT_ADDRESS]),
+    ]);
     return {
+      ...(sUSDC.status === "fulfilled"
+        ? { sUSDC: sUSDC.value }
+        : { sUSDCError: (sUSDC.reason as Error).message }),
       erc20: erc20.status === "fulfilled" ? erc20.value : [],
       src20: src20.status === "fulfilled" ? src20.value : [],
       ...(erc20.status === "rejected" ? { erc20Error: (erc20.reason as Error).message } : {}),
@@ -1012,6 +1034,7 @@ export class MainSDK {
     recipient: string,
     amount: string,
     contractAddress: string,
+    decimals = DEFAULT_TOKEN_DECIMALS,
     note?: string
   ): Promise<{ txHash: string }> => {
     this.assertDeterministicSigning();
@@ -1029,7 +1052,7 @@ export class MainSDK {
       encryptionSk
     );
 
-    const amountBigInt = parseUnits(amount, 18);
+    const amountBigInt = parseUnits(amount, decimals);
     const txHash = await this.blockchainApiService.submitShieldedTransfer(
       client,
       contractAddress as Address,
