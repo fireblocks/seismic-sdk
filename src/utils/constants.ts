@@ -40,12 +40,27 @@ export const api_constants = {
 
 /**
  * Native coin info for Seismic.
- * Seismic's native asset is ETH - it is an EVM-compatible L1.
+ * Seismic's native asset is SIZE - it is an EVM-compatible L1.
+ * sUSDC (see below) is the gas and value asset in almost all cases.
  */
 export const chain_info = {
   coinDecimals: 18,
-  coinSymbol: "ETH",
+  coinSymbol: "SIZE",
 };
+
+/**
+ * sUSDC (Shielded USD Coin) - Seismic's gas and primary value token.
+ *
+ * Seismic uses a dual-asset model: native SIZE + sUSDC.
+ * In practice gas auto-selects to sUSDC (whichever asset balance is higher wins,
+ * and sUSDC dominates almost all wallets). The SDK surfaces sUSDC as the only
+ * user-facing asset; native SIZE transfers are not exposed.
+ *
+ * Contract confirmed by Seismic team on 2026-05-27.
+ */
+export const SUSDC_CONTRACT_ADDRESS =
+  "0x790701048922e265105fd6a4467a2901c2201c43" as `0x${string}`;
+export const SUSDC_DECIMALS = 6; // Confirmed by Seismic team (standard USDC-6 precision)
 
 /**
  * Fixed 32-byte seed message used for deterministic encryption key derivation.
