@@ -1,4 +1,4 @@
-import { http, type Chain, type Address, type Hex, type Transport } from "viem";
+import { http, type Chain, type Address, type Hex, type Transport, formatUnits } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import type { LocalAccount } from "viem/accounts";
 import {
@@ -46,7 +46,7 @@ export class SeismicShieldedService {
     txHash: string,
     encryptionSk: Hex,
     decimals: number = 18
-  ): Promise<number | null> {
+  ): Promise<string | null> {
     try {
       const tx = await this.rpc.getTransactionByHash(txHash);
       if (!tx) return null;
@@ -89,10 +89,7 @@ export class SeismicShieldedService {
 
       const amountHex = plain.slice(8 + 64, 8 + 64 + 64);
       const rawAmount = BigInt("0x" + amountHex);
-      const divisor = BigInt(10 ** decimals);
-      const whole = rawAmount / divisor;
-      const remainder = rawAmount % divisor;
-      return Number(whole) + Number(remainder) / 10 ** decimals;
+      return formatUnits(rawAmount, decimals);
     } catch (err) {
       this.logger.debug(`SRC-20 decryption failed for ${txHash}: ${(err as Error).message}`);
       return null;
