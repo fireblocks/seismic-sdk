@@ -371,7 +371,9 @@ npm run docs         # Generate TypeDoc API docs → served at http://localhost:
 ## Seismic Testnet
 
 - **Chain ID**: 5124
-- **RPC**: `https://gcp-1.seismictest.net/rpc`
+- **RPC**: `https://testnet-1.seismictest.net/rpc`
+- **WSS**: `wss://testnet-1.seismictest.net/ws`
+- **Faucet**: `https://faucet.seismictest.net/` (drips sUSDC; whitelist via Seismic team for unlimited requests)
 - **Explorer**: `https://seismic-testnet.socialscan.io/`
 - **Native asset**: SIZE (18 decimals) - not user-facing; sUSDC (`0x790701048922e265105fd6a4467a2901c2201c43`, 6 decimals) is the gas and value token in practice
 - **Block time**: ~120ms (~720k blocks/day)
