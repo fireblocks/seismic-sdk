@@ -40,6 +40,7 @@ const startServer = async () => {
     apiSecret: config.FIREBLOCKS.secretKey || "",
     basePath: (config.FIREBLOCKS.basePath as BasePath) || BasePath.US,
     testnet: config.TESTNET,
+    rpcUrl: config.RPC_URL,
     httpClient,
     skipDeterminismCheck: process.env.SKIP_DETERMINISM_CHECK === "true",
     socialscanApiKey: config.SOCIALSCAN_API_KEY,
