@@ -42,16 +42,16 @@ export class ApiController {
   };
 
   /**
-   * GET /api/:vaultId/native-balance
-   * Returns the vault's native ETH balance on Seismic.
+   * GET /api/:vaultId/susdc-balance
+   * Returns the vault's sUSDC balance (Seismic's primary gas/value token).
    */
-  public getNativeBalance = async (req: Request, res: Response) => {
+  public getSUsdcBalance = async (req: Request, res: Response) => {
     const { vaultId } = req.params as Record<string, string>;
     try {
-      const balance = await this.sdk.getNativeBalance(vaultId);
+      const balance = await this.sdk.getSUsdcBalance(vaultId);
       res.status(200).json({ success: true, data: { vaultId, balance } });
     } catch (error) {
-      this.handleError(error, res, "getNativeBalance");
+      this.handleError(error, res, "getSUsdcBalance");
     }
   };
 
@@ -104,7 +104,7 @@ export class ApiController {
       const parsedOffset = offset !== undefined ? parseInt(offset) : 0;
       const result = await this.sdk.getTransactionHistory({
         vaultId,
-        type: (type as "native" | "erc20" | "src20" | "all") ?? "all",
+        type: (type as "susdc" | "erc20" | "src20" | "all") ?? "all",
         fromBlock,
         toBlock,
         before,
@@ -155,13 +155,13 @@ export class ApiController {
 
   /**
    * POST /api/:vaultId/transfer
-   * Submits an ETH, ERC-20, or SRC-20 (shielded) transfer.
+   * Submits a sUSDC, ERC-20, or SRC-20 (shielded) transfer.
    */
   public transfer = async (req: Request, res: Response) => {
     const { vaultId } = req.params as Record<string, string>;
     const { type, recipient, destinationVaultId, amount, contractAddress, decimals, note } =
       req.body as {
-        type: "ETH" | "ERC20" | "SRC20";
+        type: "SUSDC" | "ERC20" | "SRC20";
         recipient?: string;
         destinationVaultId?: string;
         amount: string;
@@ -170,49 +170,17 @@ export class ApiController {
         note?: string;
       };
 
-    // Validate required parameters
-    if (!destinationVaultId && !recipient) {
-      res.status(400).json({
-        success: false,
-        error: "Either recipient or destinationVaultId must be provided",
-      });
-      return;
-    }
-
-    if ((type === "ERC20" || type === "SRC20") && !contractAddress) {
-      res.status(400).json({
-        success: false,
-        error: `contractAddress is required for ${type} transfers`,
-      });
-      return;
-    }
-
     try {
-      const to = destinationVaultId
-        ? await this.sdk.getSeismicAddress(destinationVaultId)
-        : (recipient as string);
-
-      let result;
-      if (type === "SRC20") {
-        result = await this.sdk.createShieldedTransaction(
-          vaultId,
-          to,
-          amount,
-          contractAddress as string,
-          note
-        );
-      } else if (type === "ERC20") {
-        result = await this.sdk.createErc20Transaction(
-          vaultId,
-          to,
-          amount,
-          contractAddress as string,
-          decimals,
-          note
-        );
-      } else {
-        result = await this.sdk.createNativeTransaction(vaultId, to, amount, false, note);
-      }
+      const result = await this.sdk.transfer({
+        vaultId,
+        type,
+        recipient,
+        destinationVaultId,
+        amount,
+        contractAddress,
+        decimals,
+        note,
+      });
       res.status(200).json({ success: true, txHash: result.txHash });
     } catch (error) {
       this.handleError(error, res, "transfer");
@@ -294,6 +262,7 @@ export class ApiController {
         statusCode: error.statusCode,
         errorType: error.errorType,
         service: error.service,
+        errorInfo: error.errorInfo,
         message: error.message,
       });
       res.status(error.statusCode || 500).json({
@@ -301,8 +270,6 @@ export class ApiController {
         error: error.message,
         statusCode: error.statusCode,
         type: error.errorType,
-        info: error.errorInfo,
-        service: error.service,
       });
     } else {
       const message = error instanceof Error ? error.message : "Unknown error";

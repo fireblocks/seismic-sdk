@@ -9,6 +9,7 @@ import {
   keccak256,
   serializeTransaction,
   parseUnits,
+  formatUnits,
   hashTypedData,
 } from "viem";
 import type { AxiosInstance } from "axios";
@@ -16,25 +17,24 @@ import { toAccount } from "viem/accounts";
 import { FireblocksService } from "./services/fireblocks.service.js";
 import { BlockchainApiService } from "./services/seismic.service.js";
 import {
-  BroadcastResult,
-  EvmTxFields,
   FireblocksConfig,
   TokenBalancesResult,
   TokenType,
   Transaction,
-  TransactionType,
   VaultData,
   SdkApiError,
 } from "./types/index.js";
 import {
   Logger,
   validateApiCredentials,
-  checkParamsAndAdjustAmount,
   formatErrorMessage,
-  unitsToCoin,
   SEED_MESSAGE_HEX,
   ERC20_SELECTORS,
   DEFAULT_TOKEN_DECIMALS,
+  SEISMIC_CHAIN_ID,
+  api_constants,
+  SUSDC_CONTRACT_ADDRESS,
+  SUSDC_DECIMALS,
 } from "./utils/index.js";
 import { deriveKeyFromSignature } from "./crypto/key-derivation.js";
 import { buildBalanceReadMessage, createExpiry } from "./seismic/signature.js";
@@ -136,6 +136,20 @@ export class MainSDK {
    * @throws SdkApiError if deterministic signing verification fails
    */
   static async create(config: MainSDKConfig): Promise<MainSDK> {
+    // Guard: mainnet is not yet live.
+    if (!config.testnet) {
+      const mainnetRpc = config.rpcUrl ?? api_constants.mainnet_rpc;
+      if (!mainnetRpc || SEISMIC_CHAIN_ID.mainnet === 0) {
+        throw new SdkApiError(
+          "Seismic mainnet is not yet available. Set NETWORK=testnet (or testnet: true) to use the Seismic testnet.",
+          503,
+          "MAINNET_NOT_AVAILABLE",
+          undefined,
+          "MainSDK"
+        );
+      }
+    }
+
     const sdk = new MainSDK(config);
     if (!sdk.skipDeterminismCheck) {
       await sdk.runDeterminismCheck("0");
@@ -295,9 +309,9 @@ export class MainSDK {
 
   /**
    * Retrieves transaction history for a vault.
-   * Routes by type: native (requires SOCIALSCAN_API_KEY), erc20, src20, all.
+   * Routes by type: susdc (requires SOCIALSCAN_API_KEY), erc20, src20, all.
    * @param params.vaultId - Vault account ID
-   * @param params.type - Asset type filter: "native" | "erc20" | "src20" | "all"
+   * @param params.type - Asset type filter: "susdc" | "erc20" | "src20" | "all"
    * @param params.fromBlock - Optional start block (hex format or "earliest")
    * @param params.toBlock - Optional end block (hex format or "latest")
    * @param params.before - Optional end date (YYYY-MM-DD format) - overrides toBlock
@@ -309,7 +323,7 @@ export class MainSDK {
    */
   public async getTransactionHistory(params: {
     vaultId: string;
-    type?: "native" | "erc20" | "src20" | "all";
+    type?: "susdc" | "erc20" | "src20" | "all";
     fromBlock?: string;
     toBlock?: string;
     before?: string;
@@ -377,15 +391,17 @@ export class MainSDK {
   };
 
   /**
-   * Retrieves the native coin balance for a vault account address.
+   * Returns the vault's sUSDC balance (Seismic's primary gas and value token).
+   *
    * @param vaultAccountId - The Fireblocks vault account ID
-   * @returns Balance in ETH units
+   * @returns Balance as a decimal string (e.g. "250.5")
    * @throws SdkApiError on failure
    */
-  public getNativeBalance = async (vaultAccountId: string): Promise<number> => {
-    this.logger.debug(`Fetching native balance for vault ${vaultAccountId}`);
+  public getSUsdcBalance = async (vaultAccountId: string): Promise<string> => {
+    this.logger.debug(`Fetching sUSDC balance for vault ${vaultAccountId}`);
     const { address } = await this.ensureVaultData(vaultAccountId);
-    return this.blockchainApiService.getNativeBalance(address);
+    const raw = await this.blockchainApiService.readErc20Balance(address, SUSDC_CONTRACT_ADDRESS);
+    return formatUnits(raw, SUSDC_DECIMALS);
   };
 
   /**
@@ -410,98 +426,20 @@ export class MainSDK {
   };
 
   /**
-   * Builds, signs, and broadcasts a transaction.
-   * Handles both native coin and fungible token transactions.
-   */
-  private buildSignSendTransaction = async (
-    vaultData: VaultData,
-    recipientAddress: string,
-    amount: number,
-    type: TransactionType = TransactionType.Native,
-    token?: TokenType,
-    note?: string
-  ): Promise<BroadcastResult> => {
-    try {
-      const transactionToSign = await this.blockchainApiService.serializeTransaction(
-        vaultData.address,
-        recipientAddress,
-        amount,
-        type,
-        token
-      );
-
-      const { signingHash, evmTxFields } = transactionToSign;
-      if (!signingHash || !evmTxFields) {
-        throw new Error("serializeTransaction did not return signingHash or evmTxFields");
-      }
-
-      // Fireblocks signs the 32-byte EIP-155 hash (strip 0x prefix)
-      const signedMsg = await this.fireblocksService.signTransaction(
-        (signingHash as string).slice(2),
-        vaultData.vaultAccountId,
-        note || "eth-transfer"
-      );
-
-      const sig = signedMsg.signature;
-      if (!sig?.r || !sig?.s || sig.v === undefined) {
-        throw new Error("Incomplete signature from Fireblocks (missing r, s, or v)");
-      }
-
-      // EIP-155 replay-protected v: v = chainId * 2 + 35 + recoveryBit
-      const chainId = this.blockchainApiService.getChainId();
-      const recoveryBit = sig.v < 27 ? sig.v : sig.v - 27;
-      const v = BigInt(chainId) * 2n + 35n + BigInt(recoveryBit);
-
-      const r = `0x${sig.r.replace(/^0x/, "").padStart(64, "0")}` as Hex;
-      const s = `0x${sig.s.replace(/^0x/, "").padStart(64, "0")}` as Hex;
-
-      const tx = evmTxFields as EvmTxFields;
-
-      // RLP-encode the signed transaction
-      const signedRlp = toRlp([
-        tx.nonce === "0x0" || tx.nonce === "0x" ? "0x" : (tx.nonce as Hex),
-        tx.gasPrice as Hex,
-        tx.gas as Hex,
-        tx.to as Hex,
-        tx.value as Hex,
-        tx.data as Hex,
-        numberToHex(v),
-        r,
-        s,
-      ]);
-
-      const result = await this.blockchainApiService.broadcastTransaction(signedRlp);
-      return result;
-    } catch (error) {
-      if (error instanceof SdkApiError) throw error;
-      throw new SdkApiError(
-        `Failed to build, sign or send transaction: ${formatErrorMessage(error)}`,
-        500,
-        "TX_FAILED",
-        undefined,
-        "MainSDK"
-      );
-    }
-  };
-
-  /**
-   * Unified transfer method - handles ETH, ERC-20, and SRC-20, vault-to-vault or vault-to-address.
+   * Unified transfer method - handles sUSDC, ERC-20, and SRC-20, vault-to-vault or vault-to-address.
    *
    * Exactly one of `recipient` (EVM address) or `destinationVaultId` (Fireblocks vault ID) must be set.
-   * `contractAddress` is required for ERC20 and SRC20 types.
+   * `contractAddress` is required for ERC20 and SRC20 types; sUSDC uses the built-in contract address.
    *
-   * @example vault-to-vault ETH
-   *   sdk.transfer({ vaultId: "0", type: "ETH", destinationVaultId: "1", amount: 0.5 })
+   * @example vault-to-vault sUSDC
+   *   sdk.transfer({ vaultId: "0", type: "SUSDC", destinationVaultId: "1", amount: "100" })
    * @example vault-to-address ERC-20
-   *   sdk.transfer({ vaultId: "0", type: "ERC20", recipient: "0xABC...", amount: 100, contractAddress: "0xDEF..." })
-   */
-  /**
-   * Unified transfer method - handles ETH, ERC-20, and SRC-20, vault-to-vault or vault-to-address.
+   *   sdk.transfer({ vaultId: "0", type: "ERC20", recipient: "0xABC...", amount: "100", contractAddress: "0xDEF..." })
    * @throws SdkApiError on validation failure or transaction error
    */
   public transfer = async (params: {
     vaultId: string;
-    type: "ETH" | "ERC20" | "SRC20";
+    type: "SUSDC" | "ERC20" | "SRC20";
     recipient?: string;
     destinationVaultId?: string;
     amount: string;
@@ -555,82 +493,34 @@ export class MainSDK {
         );
       return this.createErc20Transaction(vaultId, to, amount, contractAddress, decimals, note);
     }
-    return this.createNativeTransaction(vaultId, to, amount, false, note);
+    // SUSDC: use the well-known contract; decimals baked in
+    return this.createSUsdcTransaction(vaultId, to, amount, note);
   };
 
   /**
-   * Creates a native coin transaction to transfer funds to a recipient address.
+   * Transfers sUSDC (Seismic's primary gas/value token) to a recipient.
+   * Uses the well-known sUSDC contract address - callers do not need to supply it.
    *
-   * @param vaultAccountId - The Fireblocks vault account ID
-   * @param recipientAddress - The address of the recipient
-   * @param amount - The amount to transfer in native coin
-   * @param grossTransaction - If true, fee is deducted from the transferred amount (default: false)
-   * @param note - Optional note attached to the raw signing request
-   * @returns {CreateTransactionResponse} Promise
+   * @param vaultAccountId   - Source Fireblocks vault account ID
+   * @param recipientAddress - Destination EVM address
+   * @param amount           - Amount in whole sUSDC units (e.g. "100" for 100 sUSDC)
+   * @param note             - Optional label on the Fireblocks signing request
+   * @throws SdkApiError on failure
    */
-  /**
-   * Creates a native coin transaction to transfer funds to a recipient address.
-   * @throws SdkApiError on validation failure or transaction error
-   */
-  public createNativeTransaction = async (
+  public createSUsdcTransaction = async (
     vaultAccountId: string,
     recipientAddress: string,
     amount: string,
-    grossTransaction: boolean = false,
     note?: string
   ): Promise<{ txHash: string }> => {
-    const vaultData = await this.ensureVaultData(vaultAccountId);
-
-    const paramsValidationResponse = await checkParamsAndAdjustAmount(
-      this,
+    return this.createErc20Transaction(
       vaultAccountId,
       recipientAddress,
       amount,
-      grossTransaction,
-      TransactionType.Native
+      SUSDC_CONTRACT_ADDRESS,
+      SUSDC_DECIMALS,
+      note ?? "susdc-transfer"
     );
-
-    if (!paramsValidationResponse.validParams) {
-      throw new SdkApiError(
-        `Invalid transaction parameters: ${paramsValidationResponse.reason}`,
-        400,
-        "VALIDATION_ERROR",
-        undefined,
-        "MainSDK"
-      );
-    }
-
-    if (paramsValidationResponse.finalAmount === undefined) {
-      throw new SdkApiError(
-        "Could not determine transaction amount",
-        400,
-        "VALIDATION_ERROR",
-        undefined,
-        "MainSDK"
-      );
-    }
-    const adjustedAmount = unitsToCoin(paramsValidationResponse.finalAmount);
-
-    const result = await this.buildSignSendTransaction(
-      vaultData,
-      recipientAddress,
-      adjustedAmount,
-      TransactionType.Native,
-      undefined,
-      note
-    );
-
-    if (!result || result.err) {
-      throw new SdkApiError(
-        result?.err ? formatErrorMessage(result.err) : "Unknown broadcast error",
-        500,
-        "BROADCAST_FAILED",
-        undefined,
-        "MainSDK"
-      );
-    }
-
-    return { txHash: result.txid! };
   };
 
   /**
@@ -674,7 +564,7 @@ export class MainSDK {
       const [hexNonce, hexGasPrice] = await Promise.all([
         this.blockchainApiService.jsonRpc<string>("eth_getTransactionCount", [
           vaultData.address,
-          "latest",
+          "pending",
         ]),
         this.blockchainApiService.jsonRpc<string>("eth_gasPrice", []),
       ]);
@@ -855,7 +745,7 @@ export class MainSDK {
                 name: info.name ?? contractAddress,
                 symbol: info.symbol ?? contractAddress,
                 decimals,
-                balance: Number(raw) / 10 ** decimals,
+                balance: formatUnits(raw, decimals),
                 rawBalance: raw.toString(),
               };
             } catch {
@@ -864,7 +754,7 @@ export class MainSDK {
                 name: "",
                 symbol: "",
                 decimals: 18,
-                balance: 0,
+                balance: "0",
                 rawBalance: "0",
               };
             }
@@ -886,7 +776,7 @@ export class MainSDK {
             this.getSrc20Balance(vaultId, contractAddress),
             this.blockchainApiService.getErc20Info(contractAddress),
           ]);
-          const balance = balanceResult.status === "fulfilled" ? balanceResult.value : 0;
+          const balance = balanceResult.status === "fulfilled" ? balanceResult.value : "0";
           const info =
             infoResult.status === "fulfilled"
               ? infoResult.value
@@ -975,10 +865,16 @@ export class MainSDK {
    * Reads a vault's SRC-20 balance via a Fireblocks-signed read.
    * @param vaultId         - Fireblocks vault account ID
    * @param contractAddress - SRC-20 contract address (0x-prefixed)
-   * @returns Balance in whole token units (wei / 1e18)
+   * @param decimals        - Token decimal places (default: 18). Pass token's actual decimals to
+   *                          avoid precision loss - e.g. 6 for sUSDC-style tokens.
+   * @returns Balance in whole token units as a decimal string (e.g. "250.5")
    * @throws SdkApiError on failure
    */
-  public getSrc20Balance = async (vaultId: string, contractAddress: string): Promise<number> => {
+  public getSrc20Balance = async (
+    vaultId: string,
+    contractAddress: string,
+    decimals = 18
+  ): Promise<string> => {
     this.assertDeterministicSigning();
     const { address } = await this.ensureVaultData(vaultId);
     const ownerAddress = address as Address;
@@ -1022,9 +918,7 @@ export class MainSDK {
       expiry
     );
 
-    const whole = rawBalance / BigInt(10 ** 18);
-    const remainder = rawBalance % BigInt(10 ** 18);
-    return Number(whole) + Number(remainder) / 10 ** 18;
+    return formatUnits(rawBalance, decimals);
   };
 
   /**

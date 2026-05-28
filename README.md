@@ -42,7 +42,7 @@ docker run -d \
 
 The server starts on `http://localhost:8000` (configurable via `PORT`).  
 Swagger UI: `http://localhost:8000/api-docs` (REST API endpoints)  
-TypeDoc: `http://localhost:8000/docs` (SDK library API docs — run `npm run docs` first)
+TypeDoc: `http://localhost:8000/docs` (SDK library API docs - run `npm run docs` first)
 
 ---
 
@@ -261,11 +261,11 @@ await sdk.shutdown();
 
 ### Session lifecycle
 
-1. **SDK initialization** - `MainSDK.create()` constructs the SDK instance then verifies your Fireblocks workspace has [signature caching](https://developers.fireblocks.com/reference/caching-signatures#caching-signatures) enabled by signing `SEED_MESSAGE_HEX` twice and comparing the results. MPC ECDSA is not inherently deterministic — Fireblocks achieves reproducibility via backend signature caching (no TTL): identical payloads always return the same cached signature. If the two signatures differ, the SDK fails to initialize with a `DETERMINISTIC_SIGNING_REQUIRED` error, since stable encryption key derivation requires this feature. This check can be skipped with `skipDeterminismCheck: true` if you have already confirmed caching is active for your workspace.
+1. **SDK initialization** - `MainSDK.create()` constructs the SDK instance then verifies your Fireblocks workspace has [signature caching](https://developers.fireblocks.com/reference/caching-signatures#caching-signatures) enabled by signing `SEED_MESSAGE_HEX` twice and comparing the results. MPC ECDSA is not inherently deterministic - Fireblocks achieves reproducibility via backend signature caching (no TTL): identical payloads always return the same cached signature. If the two signatures differ, the SDK fails to initialize with a `DETERMINISTIC_SIGNING_REQUIRED` error, since stable encryption key derivation requires this feature. This check can be skipped with `skipDeterminismCheck: true` if you have already confirmed caching is active for your workspace.
 
 2. **Vault init (lazy)** - on first use, `getPublicKeyByVaultID` fetches the vault's compressed secp256k1 public key from Fireblocks. The Seismic/ETH address is derived via `keccak256(uncompressed_pubkey)[last 20 bytes]` and cached in memory.
 
-3. **Encryption key derivation** - `deriveEncryptionKey(vaultId)` signs a fixed 32-byte seed (`keccak256("Seismic Fireblocks Encryption Key Derivation")`) via Fireblocks RAW signing, then computes `SHA-256(fullSig)` → 32-byte `encryptionSk`. The same key is re-derived on every session restart without re-approval because Fireblocks' signature caching returns the same cached signature for the same payload — not because MPC ECDSA is cryptographically deterministic. Stored in process memory only.
+3. **Encryption key derivation** - `deriveEncryptionKey(vaultId)` signs a fixed 32-byte seed (`keccak256("Seismic Fireblocks Encryption Key Derivation")`) via Fireblocks RAW signing, then computes `SHA-256(fullSig)` → 32-byte `encryptionSk`. The same key is re-derived on every session restart without re-approval because Fireblocks' signature caching returns the same cached signature for the same payload - not because MPC ECDSA is cryptographically deterministic. Stored in process memory only.
 
 4. **TEE session** - `seismic-viem`'s `createShieldedWalletClient` fetches the Seismic TEE public key once per client instance. `encryptionSk` is used for ECDH with the TEE to derive the AES-256-GCM calldata encryption key.
 
@@ -373,5 +373,5 @@ npm run docs         # Generate TypeDoc API docs → served at http://localhost:
 - **Chain ID**: 5124
 - **RPC**: `https://gcp-1.seismictest.net/rpc`
 - **Explorer**: `https://seismic-testnet.socialscan.io/`
-- **Native asset**: SIZE (18 decimals) — not user-facing; sUSDC (`0x790701048922e265105fd6a4467a2901c2201c43`, 6 decimals) is the gas and value token in practice
+- **Native asset**: SIZE (18 decimals) - not user-facing; sUSDC (`0x790701048922e265105fd6a4467a2901c2201c43`, 6 decimals) is the gas and value token in practice
 - **Block time**: ~120ms (~720k blocks/day)
