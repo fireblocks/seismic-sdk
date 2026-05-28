@@ -10,8 +10,8 @@ Seismic is fully EVM-compatible (chain ID 5124, native ETH, secp256k1) with one 
 
 Fireblocks vaults never expose raw private keys. This SDK bridges the gap:
 
-- **Encryption key derivation**: signs a fixed seed message via Fireblocks RAW signing → SHA-256(signature) → stable `encryptionSk`. Reproducible across sessions thanks to [Fireblocks signature caching](https://developers.fireblocks.com/reference/caching-signatures#caching-signatures); never written to disk.
-- **SRC-20 balance reads**: Fireblocks signs an EIP-191 message off-chain; the SRC-20 contract verifies via `ecrecover` before decrypting the shielded balance.
+- **Encryption key derivation**: signs a fixed seed message via Fireblocks RAW signing → SHA-256(signature) → stable `encryptionSk`. Reproducible across sessions thanks to [Fireblocks signature caching](https://developers.fireblocks.com/reference/caching-signatures#caching-signatures) (backend-cached, no TTL); never written to disk.
+- **SRC-20 balance reads**: Fireblocks signs an EIP-191 message off-chain (no transaction nonce); the SRC-20 contract verifies via `ecrecover` before decrypting the shielded balance.
 - **Shielded transfers**: [`seismic-viem`](https://www.npmjs.com/package/seismic-viem) uses `encryptionSk` for ECDH with the Seismic TEE and emits type-0x4A transactions with encrypted calldata.
 - **SRC-20 viewing key**: register a stable AES key in the Seismic Directory precompile so all incoming Transfer events are encrypted to it - enables zero-N+1 transaction history with decrypted amounts for both sent and received transfers.
 
@@ -292,14 +292,24 @@ A vault can register a deterministic AES-256 key in the Seismic Directory precom
 
 The viewing key is derived as `keccak256(encryptionSk)` - no extra Fireblocks round-trip after the first derivation.
 
+### Transaction nonce strategy
+
+On-chain transactions (sUSDC, ERC-20, SRC-20 transfers) use `eth_getTransactionCount` with the `"pending"` tag to fetch the current account nonce from the blockchain. This ensures:
+
+- Nonces are correct across session restarts (no in-memory state drift)
+- Multiple concurrent processes using the same vault don't create nonce conflicts
+- Nonces increment predictably with each on-chain transaction
+
+Off-chain signed reads (like `getSrc20Balance`) use EIP-191 message signing and **do not use transaction nonces**. This prevents nonce collision between off-chain reads and on-chain transactions.
+
 ### Transaction history sources
 
-| Type     | Source                                        | Notes                                                                                                      |
-| -------- | --------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `native` | SocialScan `txlist` + `txlistinternal`        | Requires `SOCIALSCAN_API_KEY`. Filters `value > 0` (excludes `0x4A` shielded txs indexed with `value=0`).  |
-| `erc20`  | SocialScan `tokentx` → fallback `eth_getLogs` | Requires `SOCIALSCAN_API_KEY` for full history.                                                            |
-| `src20`  | `eth_getLogs` + viewing key decryption        | Always uses RPC directly. Viewing key path: zero N+1, both sent & received. Fallback ECDH path: sent only. |
-| `all`    | Native + ERC-20 merged                        | Requires `SOCIALSCAN_API_KEY`.                                                                             |
+| Type    | Source                                        | Notes                                                                                                      |
+| ------- | --------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `susdc` | SocialScan `tokentx` (sUSDC contract filter)  | Requires `SOCIALSCAN_API_KEY`. Fetches ERC-20 Transfer events for the sUSDC contract only.                 |
+| `erc20` | SocialScan `tokentx` → fallback `eth_getLogs` | Requires `SOCIALSCAN_API_KEY` for full history.                                                            |
+| `src20` | `eth_getLogs` + viewing key decryption        | Always uses RPC directly. Viewing key path: zero N+1, both sent & received. Fallback ECDH path: sent only. |
+| `all`   | sUSDC + ERC-20 + SRC-20 merged                | Requires `SOCIALSCAN_API_KEY` for sUSDC/ERC-20.                                                            |
 
 `eth_getLogs` paths scan backwards in 99,000-block windows (≈3.3 hours on Seismic testnet's 120ms blocks), stopping when enough results are collected or 10 consecutive empty windows are seen. `before`/`after` date params set the window bounds.
 
@@ -363,5 +373,5 @@ npm run docs         # Generate TypeDoc API docs → served at http://localhost:
 - **Chain ID**: 5124
 - **RPC**: `https://gcp-1.seismictest.net/rpc`
 - **Explorer**: `https://seismic-testnet.socialscan.io/`
-- **Native asset**: ETH (18 decimals)
+- **Native asset**: SIZE (18 decimals) — not user-facing; sUSDC (`0x790701048922e265105fd6a4467a2901c2201c43`, 6 decimals) is the gas and value token in practice
 - **Block time**: ~120ms (~720k blocks/day)
