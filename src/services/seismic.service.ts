@@ -8,6 +8,7 @@ import {
   toRlp,
   numberToHex,
   parseUnits,
+  formatUnits,
 } from "viem";
 import type { LocalAccount } from "viem/accounts";
 import { type ShieldedPublicClient, type ShieldedWalletClient } from "seismic-viem";
@@ -113,7 +114,7 @@ export class BlockchainApiService {
     txHash: string,
     encryptionSk: Hex,
     decimals: number = 18
-  ): Promise<number | null> => {
+  ): Promise<string | null> => {
     return this.shielded.decryptSrc20Amount(txHash, encryptionSk, decimals);
   };
 
@@ -174,7 +175,7 @@ export class BlockchainApiService {
 
   // ── Balances ────────────────────────────────────────────────────────────────
 
-  public getNativeBalance = async (address: string): Promise<number> => {
+  public getNativeBalance = async (address: string): Promise<string> => {
     try {
       if (!validateAddress(address)) {
         throw this.errorHandler.handleApiError(
@@ -184,10 +185,7 @@ export class BlockchainApiService {
       }
       const hexBalance = await this.rpc.jsonRpc<string>("eth_getBalance", [address, "latest"]);
       const weiBalance = BigInt(hexBalance);
-      const divisor = BigInt(10 ** chain_info.coinDecimals);
-      const whole = weiBalance / divisor;
-      const remainder = weiBalance % divisor;
-      return Number(whole) + Number(remainder) / 10 ** chain_info.coinDecimals;
+      return formatUnits(weiBalance, chain_info.coinDecimals);
     } catch (error) {
       throw this.errorHandler.handleApiError(error, "fetching native balance");
     }
@@ -339,7 +337,7 @@ export class BlockchainApiService {
     sender: string,
     recipient: string,
     amount: number,
-    _type: TransactionType = TransactionType.Native,
+    _type: TransactionType = TransactionType.FungibleToken,
     _token?: TokenType
   ): Promise<UnsignedTransaction> => {
     try {
@@ -359,7 +357,7 @@ export class BlockchainApiService {
       const valueWei = parseUnits(String(amount), chain_info.coinDecimals);
 
       const [hexNonce, hexGasPrice, gasLimit] = await Promise.all([
-        this.rpc.jsonRpc<string>("eth_getTransactionCount", [sender, "latest"]),
+        this.rpc.jsonRpc<string>("eth_getTransactionCount", [sender, "pending"]),
         this.rpc.jsonRpc<string>("eth_gasPrice", []),
         this.estimateGas(sender, recipient, `0x${valueWei.toString(16)}`).catch(() => 100_000n),
       ]);
@@ -401,7 +399,7 @@ export class BlockchainApiService {
     sender: string,
     recipient: string,
     amount: number,
-    type: TransactionType = TransactionType.Native,
+    type: TransactionType = TransactionType.FungibleToken,
     token?: TokenType
   ): Promise<UnsignedTransaction> => {
     try {

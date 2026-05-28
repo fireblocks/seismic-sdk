@@ -1,4 +1,5 @@
 import { AxiosError, type AxiosInstance } from "axios";
+import { formatUnits } from "viem";
 import { Transaction, TransactionType } from "../types/index.js";
 import {
   DEFAULT_TOKEN_DECIMALS,
@@ -250,10 +251,10 @@ export class ExplorerService {
     const sliced = all.slice(offset, offset + limit);
 
     return sliced.map((tx) => ({
-      type: TransactionType.Native,
+      type: TransactionType.FungibleToken,
       sender: tx.fromAddress ?? tx.from ?? "",
       recipient: tx.toAddress ?? tx.to ?? "",
-      amount: Number(BigInt(tx.value)) / 1e18,
+      amount: formatUnits(BigInt(tx.value), 18),
       transaction_hash: tx.hash,
       timestamp: new Date(parseInt(tx.timeStamp) * 1000)
         .toISOString()
@@ -321,7 +322,7 @@ export class ExplorerService {
         },
         sender: tx.fromAddress ?? tx.from ?? "",
         recipient: tx.toAddress ?? tx.to ?? "",
-        amount: Number(BigInt(tx.value)) / 10 ** decimals,
+        amount: formatUnits(BigInt(tx.value), decimals),
         transaction_hash: tx.hash,
         timestamp: new Date(parseInt(tx.timeStamp) * 1000)
           .toISOString()
@@ -401,7 +402,7 @@ export class ExplorerService {
       sender: "0x" + (log.topics[1]?.slice(-40) ?? ""),
       recipient: "0x" + (log.topics[2]?.slice(-40) ?? ""),
       // Amount is encrypted - cannot be decoded without the vault's encryptionSk.
-      amount: 0,
+      amount: "0",
       encryptedAmount: log.data,
       transaction_hash: log.transactionHash,
       timestamp: new Date(parseInt(log.timeStamp, 16) * 1000)
@@ -485,7 +486,7 @@ export class ExplorerService {
       name: string;
       symbol: string;
       decimals: number;
-      balance: number;
+      balance: string;
       rawBalance: string;
     }[]
   > => {
@@ -508,7 +509,7 @@ export class ExplorerService {
           name: t.TokenName,
           symbol: t.TokenSymbol,
           decimals,
-          balance: Number(BigInt(t.TokenQuantity)) / 10 ** decimals,
+          balance: formatUnits(BigInt(t.TokenQuantity), decimals),
           rawBalance: t.TokenQuantity,
         };
       });
