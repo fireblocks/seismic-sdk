@@ -42,6 +42,7 @@ const startServer = async () => {
     testnet: config.TESTNET,
     httpClient,
     skipDeterminismCheck: process.env.SKIP_DETERMINISM_CHECK === "true",
+    socialscanApiKey: config.SOCIALSCAN_API_KEY,
   });
 
   // Mount API routes
