@@ -144,9 +144,7 @@ export class TransactionHistoryService {
           seen.add(tx.transaction_hash);
           return true;
         });
-        const merged = deduped.sort((a, b) =>
-          (b.timestamp ?? "").localeCompare(a.timestamp ?? "")
-        );
+        const merged = deduped.sort((a, b) => (b.timestamp ?? "").localeCompare(a.timestamp ?? ""));
         const allPage = merged.slice(0, limit);
         return {
           transactions: allPage,
@@ -277,7 +275,7 @@ export class TransactionHistoryService {
           if (block) blockTimestamps.set(blockNum, this.rpc.toIsoTimestamp(block.timestamp));
         }),
         ...uniqueContracts.map(async (contractAddr) => {
-          const info = await this._getErc20Info(contractAddr);
+          const info = await this._getTokenInfo(contractAddr);
           tokenDecimals.set(contractAddr, info.decimals ?? DEFAULT_TOKEN_DECIMALS);
           tokenSymbols.set(contractAddr, info.symbol ?? contractAddr);
         }),
@@ -406,7 +404,7 @@ export class TransactionHistoryService {
         if (block) blockTimestamps.set(blockNum, this.rpc.toIsoTimestamp(block.timestamp));
       }),
       ...uniqueContracts.map(async (contractAddr) => {
-        const info = await this._getErc20Info(contractAddr);
+        const info = await this._getTokenInfo(contractAddr);
         tokenDecimals.set(contractAddr, info.decimals ?? DEFAULT_TOKEN_DECIMALS);
         tokenSymbols.set(contractAddr, info.symbol ?? contractAddr);
       }),
@@ -522,7 +520,7 @@ export class TransactionHistoryService {
   }
 
   // Inline ERC-20 info helper - avoids a circular reference back to BlockchainApiService
-  private async _getErc20Info(
+  private async _getTokenInfo(
     contractAddress: string
   ): Promise<{ name: string | null; symbol: string | null; decimals: number | null }> {
     const call = async (data: string): Promise<string> => {

@@ -195,7 +195,7 @@ export class BlockchainApiService {
    * Fetches name, symbol, decimals, and totalSupply from a standard ERC-20 contract.
    * Any field that fails to decode (e.g. non-standard contract) is returned as null.
    */
-  public getErc20Info = async (
+  public getTokenInfo = async (
     contractAddress: string
   ): Promise<{
     name: string | null;

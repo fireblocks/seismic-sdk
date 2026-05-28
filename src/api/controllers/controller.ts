@@ -223,7 +223,7 @@ export class ApiController {
   public getContractInfo = async (req: Request, res: Response) => {
     const { contractAddress } = req.params as Record<string, string>;
     try {
-      const data = await this.sdk.getErc20Info(contractAddress);
+      const data = await this.sdk.getTokenInfo(contractAddress);
       res.status(200).json({ success: true, data: { contractAddress, ...data } });
     } catch (error) {
       this.handleError(error, res, "getContractInfo");
