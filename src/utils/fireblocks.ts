@@ -8,6 +8,7 @@ import {
   VaultsApiGetPublicKeyInfoRequest,
 } from "@fireblocks/ts-sdk";
 import { Logger, POLLING_CONSTANTS, derivationPath, formatErrorMessage } from "./index.js";
+import { SdkApiError } from "../types/index.js";
 
 const logger = new Logger("utils:fireblocks");
 
@@ -99,11 +100,35 @@ export const getTxStatus = async (
       switch (txResponse.data.status) {
         case TransactionStateEnum.Blocked:
         case TransactionStateEnum.Cancelled:
-        case TransactionStateEnum.Failed:
         case TransactionStateEnum.Rejected:
           throw new Error(
             `Transaction ${txResponse.data.id} failed with status: ${txResponse.data.status}\nSub-Status: ${txResponse.data.subStatus}`
           );
+        case TransactionStateEnum.Failed: {
+          const signedBy = txResponse.data.signedBy;
+          if (
+            txResponse.data.subStatus === "SIGNING_ERROR" &&
+            (!signedBy || signedBy.length === 0)
+          ) {
+            throw new SdkApiError(
+              "Fireblocks RAW signing failed with SIGNING_ERROR and no signer. " +
+                "This typically means the API user's MPC key has not been approved yet. " +
+                "Fix: Fireblocks Console → Users & Network → API Users → select your API user → Approve MPC Key.",
+              503,
+              "FIREBLOCKS_API_USER_PENDING_MPC_APPROVAL",
+              {
+                txId: txResponse.data.id,
+                status: txResponse.data.status,
+                subStatus: txResponse.data.subStatus,
+                signedBy,
+              },
+              "FireblocksSigner"
+            );
+          }
+          throw new Error(
+            `Transaction ${txResponse.data.id} failed with status: ${txResponse.data.status}\nSub-Status: ${txResponse.data.subStatus}`
+          );
+        }
         default:
           break;
       }
