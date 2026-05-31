@@ -57,7 +57,8 @@ TypeDoc: `http://localhost:8000/docs` (SDK library API docs - run `npm run docs`
 | `PORT`                                |          | HTTP server port (default: `8000`)                                                                                                                                                                                                                        |
 | `LOG_LEVEL`                           |          | `DEBUG` \| `INFO` \| `WARN` \| `ERROR` \| `NONE` (case-insensitive, default: `INFO`)                                                                                                                                                                      |
 | `SKIP_DETERMINISM_CHECK`              |          | Skip signature-caching verification at startup (default: `false`). Only set to `true` if you have confirmed your Fireblocks workspace has [signature caching](https://developers.fireblocks.com/reference/caching-signatures#caching-signatures) enabled. |
-| `SOCIALSCAN_API_KEY`                  |          | SocialScan Explorer API key - required for native ETH history. Get one at [developer.socialscan.io](https://developer.socialscan.io)                                                                                                                      |
+| `SOCIALSCAN_API_KEY`                  |          | SocialScan Explorer API key - required for ERC-20 transaction history. Get one at [developer.socialscan.io](https://developer.socialscan.io)                                                                                                              |
+| `TX_LOG_DIR`                          |          | Directory where `tx-log.ndjson` is written on every broadcast (default: `.`). Each line: `{ timestamp, vault, type, to, amount, contract?, nonce?, txHash }`                                                                                              |
 | `HTTP_TIMEOUT`                        |          | HTTP client timeout in milliseconds (default: `30000`)                                                                                                                                                                                                    |
 | `HTTP_USER_AGENT`                     |          | HTTP `User-Agent` header (default: `@fireblocks/seismic-sdk/<version>`)                                                                                                                                                                                   |
 
@@ -76,10 +77,9 @@ All routes are mounted at `/api`. Full interactive docs at `GET /api-docs` (Swag
 
 ### Balances
 
-| Method | Route                          | Description                                      |
-| ------ | ------------------------------ | ------------------------------------------------ |
-| `GET`  | `/api/:vaultId/native-balance` | Native ETH balance                               |
-| `GET`  | `/api/:vaultId/token-balances` | ERC-20 and/or SRC-20 balances (see params below) |
+| Method | Route                          | Description                                         |
+| ------ | ------------------------------ | --------------------------------------------------- |
+| `GET`  | `/api/:vaultId/token-balances` | sUSDC + ERC-20 + SRC-20 balances (see params below) |
 
 **Query parameters for `/token-balances`:**
 
@@ -94,14 +94,20 @@ All routes are mounted at `/api`. Full interactive docs at `GET /api-docs` (Swag
 {
   "success": true,
   "data": {
+    "sUSDC": {
+      "contractAddress": "0x790701048922e265105fd6a4467a2901c2201c43",
+      "name": "Shielded USD Coin",
+      "symbol": "SUSDC",
+      "decimals": 6,
+      "balance": "250"
+    },
     "erc20": [
       {
         "contractAddress": "0x...",
         "name": "USDC",
         "symbol": "USDC",
         "decimals": 6,
-        "balance": 100,
-        "rawBalance": "100000000"
+        "balance": "100"
       }
     ],
     "src20": [
@@ -110,14 +116,14 @@ All routes are mounted at `/api`. Full interactive docs at `GET /api-docs` (Swag
         "name": "TSRC",
         "symbol": "TSRC",
         "decimals": 18,
-        "balance": 9139
+        "balance": "9139"
       }
     ]
   }
 }
 ```
 
-When `type=all`, each type is fetched in parallel and fails independently. If one fails, the response is still `200` with the successful data plus an error field (`erc20Error` or `src20Error`) for the failed type.
+`sUSDC` is always fetched separately (it's the gas token; balance uses `balanceOfSigned` - no gas required). When `type=all`, each type is fetched in parallel and fails independently - partial results returned with `erc20Error`/`src20Error` on failure.
 
 ### SRC-20 Viewing Key
 
@@ -135,16 +141,16 @@ When `type=all`, each type is fetched in parallel and fails independently. If on
 
 **Query parameters for `/transactions`:**
 
-| Param       | Default | Description                                                                                                          |
-| ----------- | ------- | -------------------------------------------------------------------------------------------------------------------- |
-| `type`      | `erc20` | `native` \| `erc20` \| `src20` \| `all`. `native` and `all` require `SOCIALSCAN_API_KEY`.                            |
-| `contracts` |         | Comma-separated contract addresses to filter by. Required for `type=src20`.                                          |
-| `limit`     | `50`    | Max results per page.                                                                                                |
-| `offset`    | `0`     | Results to skip (for pagination).                                                                                    |
-| `before`    |         | Return transactions on or before this date (`YYYY-MM-DD`). Converts to an approximate block using ~120ms block time. |
-| `after`     |         | Return transactions on or after this date (`YYYY-MM-DD`). Converts to an approximate block using ~120ms block time.  |
-| `fromBlock` |         | Hex start block. Only used for explicit `eth_getLogs` range; overridden by `after` if both are provided.             |
-| `toBlock`   |         | Hex end block. Only used for explicit `eth_getLogs` range; overridden by `before` if both are provided.              |
+| Param       | Default | Description                                                                                                                                                                            |
+| ----------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `type`      | `erc20` | `erc20` \| `src20` \| `all`. `erc20` and `all` require `SOCIALSCAN_API_KEY` for full history. For sUSDC history use `type=src20&contracts=0x790701048922e265105fd6a4467a2901c2201c43`. |
+| `contracts` |         | Comma-separated contract addresses to filter by. Required for `type=src20`.                                                                                                            |
+| `limit`     | `50`    | Max results per page.                                                                                                                                                                  |
+| `offset`    | `0`     | Results to skip (for pagination).                                                                                                                                                      |
+| `before`    |         | Return transactions on or before this date (`YYYY-MM-DD`). Converts to an approximate block using ~120ms block time.                                                                   |
+| `after`     |         | Return transactions on or after this date (`YYYY-MM-DD`). Converts to an approximate block using ~120ms block time.                                                                    |
+| `fromBlock` |         | Hex start block. Only used for explicit `eth_getLogs` range; overridden by `after` if both are provided.                                                                               |
+| `toBlock`   |         | Hex end block. Only used for explicit `eth_getLogs` range; overridden by `before` if both are provided.                                                                                |
 
 > **Date range notes**: dates are converted to block numbers via `currentBlock - (now - date) / 120ms`. History depth is ~41 days (300 windows × 99k blocks × 120ms). Requests for older data include a `warning` in the response meta.
 
@@ -172,23 +178,27 @@ When `type=all`, each type is fetched in parallel and fails independently. If on
 
 ### Transfers
 
-| Method | Route                    | Description                           |
-| ------ | ------------------------ | ------------------------------------- |
-| `POST` | `/api/:vaultId/transfer` | Submit ETH / ERC-20 / SRC-20 transfer |
+| Method | Route                    | Description                             |
+| ------ | ------------------------ | --------------------------------------- |
+| `POST` | `/api/:vaultId/transfer` | Submit SUSDC / ERC-20 / SRC-20 transfer |
 
 **Transfer body:**
 
 ```json
 {
-  "type": "SRC20",
+  "type": "SUSDC",
   "recipient": "0x...",
-  "amount": 1.5,
-  "contractAddress": "0x...",
+  "amount": "1.5",
   "note": "optional label"
 }
 ```
 
-`type` must be `"ETH"`, `"ERC20"`, or `"SRC20"`. Use `recipient` (direct address) or `destinationVaultId` (Fireblocks vault ID, resolved automatically). `contractAddress` is required for ERC-20 and SRC-20.
+`type` must be `"SUSDC"`, `"ERC20"`, or `"SRC20"`.
+
+- `SUSDC` - sUSDC shielded transfer; contract address is baked in, no need to supply it.
+- `ERC20` / `SRC20` - `contractAddress` required.
+
+Use `recipient` (direct address) or `destinationVaultId` (Fireblocks vault ID, resolved automatically).
 
 ### Contracts
 
@@ -223,9 +233,13 @@ const sdk = await MainSDK.create({
 
 // Vault identity (lazy - runs on first use)
 const address = await sdk.getSeismicAddress("0");
-const balance = await sdk.getNativeBalance("0");
 
-// SRC-20 shielded balance - Fireblocks signs the read authorization
+// Token balances - sUSDC is always returned separately (it's the gas token)
+const balances = await sdk.getTokenBalances("0", "all");
+// balances.sUSDC.balance  → "250"
+// balances.src20          → [...other SRC-20 tokens]
+
+// SRC-20 shielded balance (any SRC-20 contract, including sUSDC)
 const src20 = await sdk.getSrc20Balance("0", "0xContractAddress");
 
 // Register viewing key (one-time per vault address)
@@ -243,13 +257,15 @@ const history = await sdk.getTransactionHistory({
   offset: 0,
 });
 
-// Shielded transfer - encryptionSk derived once, then cached
+// sUSDC transfer - contract address baked in, no need to supply it
+const susdcTx = await sdk.createSUsdcTransaction("0", "0xRecipient", "1.5");
+
+// Any other SRC-20 shielded transfer
 const tx = await sdk.createShieldedTransaction(
   "0", // vaultId
   "0xRecipient",
-  1.5, // amount in whole units
-  "0xContract",
-  "optional note"
+  "1.5", // amount in whole units
+  "0xContract"
 );
 
 await sdk.shutdown();
@@ -304,12 +320,11 @@ Off-chain signed reads (like `getSrc20Balance`) use EIP-191 message signing and 
 
 ### Transaction history sources
 
-| Type    | Source                                        | Notes                                                                                                      |
-| ------- | --------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `susdc` | SocialScan `tokentx` (sUSDC contract filter)  | Requires `SOCIALSCAN_API_KEY`. Fetches ERC-20 Transfer events for the sUSDC contract only.                 |
-| `erc20` | SocialScan `tokentx` → fallback `eth_getLogs` | Requires `SOCIALSCAN_API_KEY` for full history.                                                            |
-| `src20` | `eth_getLogs` + viewing key decryption        | Always uses RPC directly. Viewing key path: zero N+1, both sent & received. Fallback ECDH path: sent only. |
-| `all`   | sUSDC + ERC-20 + SRC-20 merged                | Requires `SOCIALSCAN_API_KEY` for sUSDC/ERC-20.                                                            |
+| Type    | Source                                        | Notes                                                                                                                                                          |
+| ------- | --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `erc20` | SocialScan `tokentx` → fallback `eth_getLogs` | Requires `SOCIALSCAN_API_KEY` for full history.                                                                                                                |
+| `src20` | `eth_getLogs` + viewing key decryption        | Always uses RPC directly. Pass `contracts=<sUSDC addr>` to filter sUSDC-only. Viewing key path: zero N+1, both sent & received. Fallback ECDH path: sent only. |
+| `all`   | ERC-20 + SRC-20 merged                        | Requires `SOCIALSCAN_API_KEY` for ERC-20.                                                                                                                      |
 
 `eth_getLogs` paths scan backwards in 99,000-block windows (≈3.3 hours on Seismic testnet's 120ms blocks), stopping when enough results are collected or 10 consecutive empty windows are seen. `before`/`after` date params set the window bounds.
 
