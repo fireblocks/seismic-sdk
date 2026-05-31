@@ -36,6 +36,7 @@ import {
   api_constants,
   SUSDC_CONTRACT_ADDRESS,
   SUSDC_DECIMALS,
+  logTx,
 } from "./utils/index.js";
 import { deriveKeyFromSignature } from "./crypto/key-derivation.js";
 import { buildBalanceReadMessage, createExpiry } from "./seismic/signature.js";
@@ -53,7 +54,7 @@ import { buildBalanceReadMessage, createExpiry } from "./seismic/signature.js";
  * Library consumers should wrap calls in try/catch:
  *
  *   try {
- *     const balance = await sdk.getNativeBalance(vaultId);
+ *     const balance = await sdk.getSUsdcBalance(vaultId);
  *   } catch (err) {
  *     if (err instanceof SdkApiError) {
  *       // err.statusCode, err.errorType, err.service available
@@ -635,7 +636,18 @@ export class MainSDK {
           "MainSDK"
         );
       }
-      return { txHash: result.txid! };
+      const txHash = result.txid!;
+      logTx({
+        timestamp: new Date().toISOString(),
+        vault: vaultAccountId,
+        type: "ERC20",
+        to: recipientAddress,
+        amount,
+        contract: contractAddress,
+        nonce,
+        txHash,
+      });
+      return { txHash };
     } catch (error) {
       if (error instanceof SdkApiError) throw error;
       throw new SdkApiError(
@@ -989,6 +1001,14 @@ export class MainSDK {
     const txHash = await this.blockchainApiService.registerViewingKey(client, viewingKey);
     vaultData.viewingKeyRegistered = true;
     this.logger.info(`Viewing key registered | vault:${vaultId} | tx:${txHash}`);
+    logTx({
+      timestamp: new Date().toISOString(),
+      vault: vaultId,
+      type: "register-viewing-key",
+      to: vaultData.address,
+      amount: "0",
+      txHash,
+    });
     return { txHash };
   };
 
@@ -1064,6 +1084,16 @@ export class MainSDK {
       `Shielded transfer submitted | vault:${vaultId} | txHash:${txHash}` +
         (note ? ` | note:${note}` : "")
     );
+    logTx({
+      timestamp: new Date().toISOString(),
+      vault: vaultId,
+      type:
+        contractAddress.toLowerCase() === SUSDC_CONTRACT_ADDRESS.toLowerCase() ? "SUSDC" : "SRC20",
+      to: recipient,
+      amount,
+      contract: contractAddress,
+      txHash,
+    });
     return { txHash };
   };
 

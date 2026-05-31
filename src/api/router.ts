@@ -22,7 +22,7 @@ const vaultIdParam = z.object({
  * Routes (all under /api):
  *   GET  /api/:vaultId/address
  *   GET  /api/:vaultId/public-key
- *   GET  /api/:vaultId/susdc-balance
+
  *   GET  /api/:vaultId/token-balances?type=erc20|src20|all&contracts=0x...
  *   POST /api/:vaultId/src20/register-key
  *   GET  /api/:vaultId/src20/key-status
@@ -151,33 +151,6 @@ export const configureRouter = (sdk: MainSDK): Router => {
 
   /**
    * @openapi
-   * /api/{vaultId}/susdc-balance:
-   *   get:
-   *     tags: [Balance]
-   *     summary: Get vault sUSDC balance
-   *     description: |
-   *       Returns the vault's sUSDC balance. sUSDC is Seismic's primary gas/value token -
-   *       gas fees are automatically paid in sUSDC in almost all cases.
-   *     parameters:
-   *       - in: path
-   *         name: vaultId
-   *         required: true
-   *         schema:
-   *           type: string
-   *     responses:
-   *       200:
-   *         description: sUSDC balance as a decimal string (e.g. "250.5")
-   *       400:
-   *         description: Invalid vaultId
-   */
-  router.get(
-    "/:vaultId/susdc-balance",
-    validate({ params: vaultIdParam }),
-    controller.getSUsdcBalance
-  );
-
-  /**
-   * @openapi
    * /api/{vaultId}/token-balances:
    *   get:
    *     tags: [Balance]
@@ -286,9 +259,8 @@ export const configureRouter = (sdk: MainSDK): Router => {
    *       **`type` parameter controls which asset class is fetched:**
    *       - `erc20` (default) - standard ERC-20 Transfer events. Uses SocialScan `tokentx` if
    *         `SOCIALSCAN_API_KEY` is set, otherwise falls back to `eth_getLogs` (last 99k blocks).
-   *       - `susdc` - sUSDC transfers (Seismic's primary gas/value token). **Requires `SOCIALSCAN_API_KEY`**.
-   *       - `src20` - Seismic SRC-20 Transfer events.
-   *       - `all` - sUSDC + ERC-20 + SRC-20 merged. **Requires `SOCIALSCAN_API_KEY`** for sUSDC/ERC-20.
+   *       - `src20` - Seismic SRC-20 Transfer events. For sUSDC-only history, pass `contracts=0x790701048922e265105fd6a4467a2901c2201c43` (sUSDC testnet contract).
+   *       - `all` - ERC-20 + SRC-20 merged. **Requires `SOCIALSCAN_API_KEY`** for ERC-20.
    *     parameters:
    *       - in: path
    *         name: vaultId
@@ -299,7 +271,7 @@ export const configureRouter = (sdk: MainSDK): Router => {
    *         name: type
    *         schema:
    *           type: string
-   *           enum: [susdc, erc20, src20, all]
+   *           enum: [erc20, src20, all]
    *           default: erc20
    *         description: Asset type to fetch (see description above).
    *       - in: query

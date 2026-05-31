@@ -139,7 +139,7 @@ export const submitTransactionBody = z.object({
  * Validates query params for GET /api/:vaultId/transactions
  */
 export const transactionsQuery = z.object({
-  type: z.enum(["susdc", "erc20", "src20", "all"]).optional(),
+  type: z.enum(["erc20", "src20", "all"]).optional(),
   contracts: z.string().optional(),
   limit: z.string().optional(),
   offset: z.string().optional(),

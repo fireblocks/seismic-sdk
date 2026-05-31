@@ -42,20 +42,6 @@ export class ApiController {
   };
 
   /**
-   * GET /api/:vaultId/susdc-balance
-   * Returns the vault's sUSDC balance (Seismic's primary gas/value token).
-   */
-  public getSUsdcBalance = async (req: Request, res: Response) => {
-    const { vaultId } = req.params as Record<string, string>;
-    try {
-      const balance = await this.sdk.getSUsdcBalance(vaultId);
-      res.status(200).json({ success: true, data: { vaultId, balance } });
-    } catch (error) {
-      this.handleError(error, res, "getSUsdcBalance");
-    }
-  };
-
-  /**
    * GET /api/:vaultId/token-balances?type=erc20|src20|all&contracts=0x...
    * Returns ERC-20 and/or SRC-20 token balances. Contracts are optional - omitting
    * them triggers auto-discovery. When type=all, each type fails independently:
@@ -104,7 +90,7 @@ export class ApiController {
       const parsedOffset = offset !== undefined ? parseInt(offset) : 0;
       const result = await this.sdk.getTransactionHistory({
         vaultId,
-        type: (type as "susdc" | "erc20" | "src20" | "all") ?? "all",
+        type: (type as "erc20" | "src20" | "all") ?? "all",
         fromBlock,
         toBlock,
         before,

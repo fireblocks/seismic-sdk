@@ -175,19 +175,28 @@ export class BlockchainApiService {
 
   // ── Balances ────────────────────────────────────────────────────────────────
 
-  public getNativeBalance = async (address: string): Promise<string> => {
+  /**
+   * Internal debug helper. Returns `eth_getBalance` reports for the address.
+   *
+   * On Seismic testnet `eth_getBalance` returns the sUSDC balance (scaled), NOT the
+   * native SIZE balance. SIZE is not yet minted/distributed.
+   * Use `MainSDK.getSUsdcBalance(vaultId)` for sUSDC balance via `balanceOfSigned()`.
+   * 
+   * This method only exists for ops/debug.
+   */
+  public getEthGetBalanceFacade = async (address: string): Promise<string> => {
     try {
       if (!validateAddress(address)) {
         throw this.errorHandler.handleApiError(
           new Error("Invalid address"),
-          "fetching native balance"
+          "fetching eth_getBalance facade"
         );
       }
       const hexBalance = await this.rpc.jsonRpc<string>("eth_getBalance", [address, "latest"]);
       const weiBalance = BigInt(hexBalance);
       return formatUnits(weiBalance, chain_info.coinDecimals);
     } catch (error) {
-      throw this.errorHandler.handleApiError(error, "fetching native balance");
+      throw this.errorHandler.handleApiError(error, "fetching eth_getBalance facade");
     }
   };
 
