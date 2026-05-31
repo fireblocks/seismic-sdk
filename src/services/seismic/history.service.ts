@@ -89,28 +89,20 @@ export class TransactionHistoryService {
         this.rpc.axiosClient
       );
 
-      if (type === "susdc") {
-        // sUSDC is a standard ERC-20 - route through tokentx filtered to the sUSDC contract.
-        const transactions = await explorer.getErc20Transactions(
+      if (type === "all") {
+        // "all" = sUSDC (via SRC-20/eth_getLogs) + other ERC-20 (SocialScan) + SRC-20 (eth_getLogs).
+        // sUSDC is SRC-20 - SocialScan does not index its 4-topic Transfer events via tokentx.
+        const susdcParams = {
           address,
-          SUSDC_CONTRACT_ADDRESS,
+          type: "src20" as const,
+          contracts: [SUSDC_CONTRACT_ADDRESS],
           limit,
           offset,
-          fromBlock,
-          toBlock
-        );
-        return {
-          transactions,
-          fromBlock: fromBlock ?? "0",
-          toBlock: toBlock ?? "latest",
-          source: "socialscan-tokentx-susdc",
-          total: transactions.length,
-          warning: dateOutOfRangeWarning,
+          encryptionSk,
+          viewingKey,
+          before,
+          after,
         };
-      }
-
-      if (type === "all") {
-        // "all" = sUSDC (ERC-20 filtered) + other ERC-20 + SRC-20. Native SIZE not exposed.
         const src20Params = {
           address,
           type: "src20" as const,
@@ -123,18 +115,11 @@ export class TransactionHistoryService {
           after,
         };
         const [sUSDC, erc20, src20Result] = await Promise.allSettled([
-          explorer.getErc20Transactions(
-            address,
-            SUSDC_CONTRACT_ADDRESS,
-            limit,
-            offset,
-            fromBlock,
-            toBlock
-          ),
+          this.getTransactionHistory(susdcParams),
           explorer.getErc20Transactions(address, contracts?.[0], limit, offset, fromBlock, toBlock),
           this.getTransactionHistory(src20Params),
         ]);
-        const sUSDCTxs = sUSDC.status === "fulfilled" ? sUSDC.value : [];
+        const sUSDCTxs = sUSDC.status === "fulfilled" ? sUSDC.value.transactions : [];
         const erc20Txs = erc20.status === "fulfilled" ? erc20.value : [];
         const src20Txs = src20Result.status === "fulfilled" ? src20Result.value.transactions : [];
         // Deduplicate: sUSDC txs may overlap with general ERC-20 query if no contract filter
@@ -179,16 +164,6 @@ export class TransactionHistoryService {
             `SocialScan unavailable (${(explorerErr as Error).message}), falling back to eth_getLogs`
           );
         }
-    }
-
-    if (type === "susdc") {
-      throw this.rpc.errorHandler.handleApiError(
-        new Error(
-          "sUSDC transaction history requires the SocialScan Explorer API (no RPC fallback). " +
-            "Set SOCIALSCAN_API_KEY in your environment (get a key at developer.socialscan.io)."
-        ),
-        "fetching transaction history"
-      );
     }
 
     const isSrc20 = type === "src20";
@@ -257,8 +232,23 @@ export class TransactionHistoryService {
         vkToBlock = scannedTo;
       }
 
-      allLogs.sort((a, b) => parseInt(b.blockNumber, 16) - parseInt(a.blockNumber, 16));
-      const sliced = allLogs.slice(offset, offset + limit);
+      // SRC-20 emits 2 log events per transfer (one encrypted to sender's key,
+      // one to recipient's key). Deduplicate by transactionHash, preferring the
+      // received-side log when available - its encryptedAmount is decryptable with
+      // our viewing key. Falls back to the sent-side log for outgoing-only txs.
+      const txHashToLog = new Map<string, EthLog>();
+      for (const log of allLogs) {
+        const existing = txHashToLog.get(log.transactionHash);
+        const isReceived =
+          log.topics[2]?.slice(-40).toLowerCase() === address.slice(2).toLowerCase();
+        if (!existing || isReceived) {
+          txHashToLog.set(log.transactionHash, log);
+        }
+      }
+      const dedupedLogs = [...txHashToLog.values()].sort(
+        (a, b) => parseInt(b.blockNumber, 16) - parseInt(a.blockNumber, 16)
+      );
+      const sliced = dedupedLogs.slice(offset, offset + limit);
 
       const uniqueBlocks = [...new Set(sliced.map((l) => l.blockNumber))];
       const uniqueContracts = [...new Set(sliced.map((l) => l.address))];
@@ -335,7 +325,7 @@ export class TransactionHistoryService {
         fromBlock: vkFromBlock,
         toBlock: vkToBlock,
         source: "eth_getLogs-viewing-key",
-        total: allLogs.length,
+        total: dedupedLogs.length,
         warning: dateOutOfRangeWarning,
       };
     }
