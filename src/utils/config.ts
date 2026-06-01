@@ -65,7 +65,7 @@ const loadConfigFromEnv = (): Config => {
       basePath: validateBasePath(process.env.BASE_PATH || ""),
     },
     APP_NAME: getPackageName() || "Fireblocks SDK",
-    TESTNET: process.env.NETWORK === "testnet",
+    TESTNET: process.env.NETWORK !== "mainnet",
     RPC_URL: process.env.RPC_URL || getDefaultRpcUrl(),
     SOCIALSCAN_API_KEY: process.env.SOCIALSCAN_API_KEY,
   };
@@ -80,7 +80,7 @@ const mergeConfig = (customConfig: CustomConfig): Config => {
       basePath: BasePath.US,
     },
     APP_NAME: getPackageName() || "Fireblocks SDK",
-    TESTNET: process.env.NETWORK === "testnet",
+    TESTNET: process.env.NETWORK !== "mainnet",
     RPC_URL: process.env.RPC_URL || getDefaultRpcUrl(),
     SOCIALSCAN_API_KEY: process.env.SOCIALSCAN_API_KEY,
   };
