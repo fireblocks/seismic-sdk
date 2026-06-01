@@ -405,6 +405,76 @@ export class MainSDK {
   };
 
   /**
+   * Fast-path batch balance fetch using `eth_getBalance` - a single JSON-RPC batch HTTP request
+   * for all vaults. No Fireblocks signing required.
+   *
+   * @param vaultIds - Array of Fireblocks vault account IDs
+   * @returns One entry per vault, in the same order as the input. Failed vaults get `balance: "0"`
+   *          and a populated `error` field rather than throwing.
+   */
+  public batchGetSUsdcBalances = async (
+    vaultIds: string[]
+  ): Promise<Array<{ vaultAccountId: string; balance: string; error?: string }>> => {
+    this.logger.debug(`batchGetSUsdcBalances: resolving ${vaultIds.length} vault(s)`);
+
+    // Resolve all vault addresses in parallel.
+    const addressResults = await Promise.allSettled(vaultIds.map((id) => this.ensureVaultData(id)));
+
+    const resolvedVaultIds: string[] = [];
+    const vaultErrors = new Map<string, string>();
+
+    for (let i = 0; i < vaultIds.length; i++) {
+      const r = addressResults[i];
+      if (r.status === "fulfilled") {
+        resolvedVaultIds.push(vaultIds[i]);
+      } else {
+        const msg = r.reason instanceof Error ? r.reason.message : String(r.reason);
+        vaultErrors.set(vaultIds[i], msg);
+      }
+    }
+
+    // Build one eth_getBalance request per resolved vault.
+    const requests = resolvedVaultIds.map((id) => ({
+      method: "eth_getBalance",
+      params: [this.vaultData.get(id)!.address, "latest"],
+    }));
+
+    let batchResults: Array<{
+      id: number;
+      result?: string;
+      error?: { code: number; message: string };
+    }> = [];
+    if (requests.length > 0) {
+      batchResults = await this.blockchainApiService.jsonRpcBatch<string>(requests);
+    }
+
+    const batchById = new Map(batchResults.map((r) => [r.id, r]));
+
+    const output: Array<{ vaultAccountId: string; balance: string; error?: string }> = [];
+    let resolvedIdx = 0;
+
+    for (const vaultAccountId of vaultIds) {
+      if (vaultErrors.has(vaultAccountId)) {
+        output.push({ vaultAccountId, balance: "0", error: vaultErrors.get(vaultAccountId) });
+        continue;
+      }
+      const item = batchById.get(resolvedIdx++);
+      if (!item || item.error) {
+        output.push({
+          vaultAccountId,
+          balance: "0",
+          error: item?.error?.message ?? "Unknown RPC error",
+        });
+      } else {
+        const balance = formatUnits(BigInt(item.result ?? "0x0"), 18);
+        output.push({ vaultAccountId, balance });
+      }
+    }
+
+    return output;
+  };
+
+  /**
    * Retrieves the fungible token balances for a vault account address.
    *
    * @param vaultAccountId - The Fireblocks vault account ID

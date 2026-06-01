@@ -83,6 +83,12 @@ export class BlockchainApiService {
     return this.rpc.jsonRpc<T>(method, params);
   }
 
+  public async jsonRpcBatch<T>(
+    requests: Array<{ method: string; params: unknown[] }>
+  ): Promise<Array<{ id: number; result?: T; error?: { code: number; message: string } }>> {
+    return this.rpc.jsonRpcBatch<T>(requests);
+  }
+
   public formatAddress = (pubKey: string): string => this.rpc.formatAddress(pubKey);
 
   public getTransactionByHash = async (txHash: string): Promise<Record<string, unknown> | null> => {
@@ -181,7 +187,7 @@ export class BlockchainApiService {
    * On Seismic testnet `eth_getBalance` returns the sUSDC balance (scaled), NOT the
    * native SIZE balance. SIZE is not yet minted/distributed.
    * Use `MainSDK.getSUsdcBalance(vaultId)` for sUSDC balance via `balanceOfSigned()`.
-   * 
+   *
    * This method only exists for ops/debug.
    */
   public getEthGetBalanceFacade = async (address: string): Promise<string> => {
