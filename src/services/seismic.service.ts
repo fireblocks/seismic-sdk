@@ -8,6 +8,7 @@ import {
   toRlp,
   numberToHex,
   parseUnits,
+  formatUnits,
 } from "viem";
 import type { LocalAccount } from "viem/accounts";
 import { type ShieldedPublicClient, type ShieldedWalletClient } from "seismic-viem";
@@ -82,6 +83,12 @@ export class BlockchainApiService {
     return this.rpc.jsonRpc<T>(method, params);
   }
 
+  public async jsonRpcBatch<T>(
+    requests: Array<{ method: string; params: unknown[] }>
+  ): Promise<Array<{ id: number; result?: T; error?: { code: number; message: string } }>> {
+    return this.rpc.jsonRpcBatch<T>(requests);
+  }
+
   public formatAddress = (pubKey: string): string => this.rpc.formatAddress(pubKey);
 
   public getTransactionByHash = async (txHash: string): Promise<Record<string, unknown> | null> => {
@@ -113,7 +120,7 @@ export class BlockchainApiService {
     txHash: string,
     encryptionSk: Hex,
     decimals: number = 18
-  ): Promise<number | null> => {
+  ): Promise<string | null> => {
     return this.shielded.decryptSrc20Amount(txHash, encryptionSk, decimals);
   };
 
@@ -174,22 +181,28 @@ export class BlockchainApiService {
 
   // ── Balances ────────────────────────────────────────────────────────────────
 
-  public getNativeBalance = async (address: string): Promise<number> => {
+  /**
+   * Internal debug helper. Returns `eth_getBalance` reports for the address.
+   *
+   * On Seismic testnet `eth_getBalance` returns the sUSDC balance (scaled), NOT the
+   * native SIZE balance. SIZE is not yet minted/distributed.
+   * Use `MainSDK.getSUsdcBalance(vaultId)` for sUSDC balance via `balanceOfSigned()`.
+   *
+   * This method only exists for ops/debug.
+   */
+  public getEthGetBalanceFacade = async (address: string): Promise<string> => {
     try {
       if (!validateAddress(address)) {
         throw this.errorHandler.handleApiError(
           new Error("Invalid address"),
-          "fetching native balance"
+          "fetching eth_getBalance facade"
         );
       }
       const hexBalance = await this.rpc.jsonRpc<string>("eth_getBalance", [address, "latest"]);
       const weiBalance = BigInt(hexBalance);
-      const divisor = BigInt(10 ** chain_info.coinDecimals);
-      const whole = weiBalance / divisor;
-      const remainder = weiBalance % divisor;
-      return Number(whole) + Number(remainder) / 10 ** chain_info.coinDecimals;
+      return formatUnits(weiBalance, chain_info.coinDecimals);
     } catch (error) {
-      throw this.errorHandler.handleApiError(error, "fetching native balance");
+      throw this.errorHandler.handleApiError(error, "fetching eth_getBalance facade");
     }
   };
 
@@ -197,7 +210,7 @@ export class BlockchainApiService {
    * Fetches name, symbol, decimals, and totalSupply from a standard ERC-20 contract.
    * Any field that fails to decode (e.g. non-standard contract) is returned as null.
    */
-  public getErc20Info = async (
+  public getTokenInfo = async (
     contractAddress: string
   ): Promise<{
     name: string | null;
@@ -339,7 +352,7 @@ export class BlockchainApiService {
     sender: string,
     recipient: string,
     amount: number,
-    _type: TransactionType = TransactionType.Native,
+    _type: TransactionType = TransactionType.FungibleToken,
     _token?: TokenType
   ): Promise<UnsignedTransaction> => {
     try {
@@ -359,13 +372,14 @@ export class BlockchainApiService {
       const valueWei = parseUnits(String(amount), chain_info.coinDecimals);
 
       const [hexNonce, hexGasPrice, gasLimit] = await Promise.all([
-        this.rpc.jsonRpc<string>("eth_getTransactionCount", [sender, "latest"]),
+        this.rpc.jsonRpc<string>("eth_getTransactionCount", [sender, "pending"]),
         this.rpc.jsonRpc<string>("eth_gasPrice", []),
         this.estimateGas(sender, recipient, `0x${valueWei.toString(16)}`).catch(() => 100_000n),
       ]);
 
       const nonce = parseInt(hexNonce, 16);
-      const gasPrice = BigInt(hexGasPrice);
+      const baseGasPrice = BigInt(hexGasPrice);
+      const gasPrice = (baseGasPrice * 120n) / 100n;
 
       const evmTxFields = {
         from: sender,
@@ -400,7 +414,7 @@ export class BlockchainApiService {
     sender: string,
     recipient: string,
     amount: number,
-    type: TransactionType = TransactionType.Native,
+    type: TransactionType = TransactionType.FungibleToken,
     token?: TokenType
   ): Promise<UnsignedTransaction> => {
     try {

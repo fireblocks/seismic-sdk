@@ -69,6 +69,33 @@ export class RpcService {
     });
   }
 
+  /**
+   * Sends a JSON-RPC 2.0 batch request - all calls in a single HTTP round-trip.
+   *
+   * Per-item errors are returned in the result array rather than thrown, so callers
+   * can handle partial failures. If the HTTP request itself fails, this throws.
+   *
+   * @param requests - Array of `{ method, params }` objects; order is preserved in the response.
+   * @returns One entry per input request, in the same order, each with `result` or `error`.
+   */
+  async jsonRpcBatch<T>(
+    requests: Array<{ method: string; params: unknown[] }>
+  ): Promise<Array<{ id: number; result?: T; error?: { code: number; message: string } }>> {
+    const batch = requests.map((req, idx) => ({
+      jsonrpc: "2.0",
+      id: idx,
+      method: req.method,
+      params: req.params,
+    }));
+    const response = await this.axiosClient.post(this.rpcUrl, batch);
+    const items = response.data as Array<{
+      id: number;
+      result?: T;
+      error?: { code: number; message: string };
+    }>;
+    return items.sort((a, b) => a.id - b.id);
+  }
+
   toIsoTimestamp(raw: string | number): string {
     let ms = typeof raw === "string" ? parseInt(raw, 16) : raw;
     // Seismic testnet uses millisecond timestamps; standard EVM uses seconds.

@@ -24,10 +24,10 @@ if (process.env.LOG_LEVEL) {
   }
 }
 
-(() => {
+(async () => {
   try {
     logger.info("server starting...");
-    startServer();
+    await startServer();
   } catch (e) {
     if (e instanceof Error) {
       logger.error("Error starting server:", { message: e.message, stack: e.stack });

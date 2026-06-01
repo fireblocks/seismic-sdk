@@ -9,3 +9,4 @@ export * from "./logger.js";
 export * from "./package.js";
 export * from "./sanitizer.js";
 export * from "./swagger.js";
+export * from "./txLog.js";

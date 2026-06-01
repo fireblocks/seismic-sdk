@@ -1,4 +1,4 @@
-import { type Hex } from "viem";
+import { type Hex, formatUnits } from "viem";
 import { computeKeyHash, AesGcmCrypto } from "seismic-viem";
 import {
   Logger,
@@ -7,6 +7,7 @@ import {
   ERC20_TRANSFER_TOPIC,
   SRC20_TRANSFER_TOPIC,
   SEISMIC_CHAIN_ID,
+  SUSDC_CONTRACT_ADDRESS,
 } from "../../utils/index.js";
 import {
   GetTransactionHistoryFromIndexerOpts,
@@ -88,25 +89,20 @@ export class TransactionHistoryService {
         this.rpc.axiosClient
       );
 
-      if (type === "native") {
-        const transactions = await explorer.getNativeTransactions(
+      if (type === "all") {
+        // "all" = sUSDC (via SRC-20/eth_getLogs) + other ERC-20 (SocialScan) + SRC-20 (eth_getLogs).
+        // sUSDC is SRC-20 - SocialScan does not index its 4-topic Transfer events via tokentx.
+        const susdcParams = {
           address,
+          type: "src20" as const,
+          contracts: [SUSDC_CONTRACT_ADDRESS],
           limit,
           offset,
-          fromBlock,
-          toBlock
-        );
-        return {
-          transactions,
-          fromBlock: fromBlock ?? "0",
-          toBlock: toBlock ?? "latest",
-          source: "socialscan-txlist",
-          total: transactions.length,
-          warning: dateOutOfRangeWarning,
+          encryptionSk,
+          viewingKey,
+          before,
+          after,
         };
-      }
-
-      if (type === "all") {
         const src20Params = {
           address,
           type: "src20" as const,
@@ -118,23 +114,28 @@ export class TransactionHistoryService {
           before,
           after,
         };
-        const [native, erc20, src20Result] = await Promise.allSettled([
-          explorer.getNativeTransactions(address, limit, offset, fromBlock, toBlock),
+        const [sUSDC, erc20, src20Result] = await Promise.allSettled([
+          this.getTransactionHistory(susdcParams),
           explorer.getErc20Transactions(address, contracts?.[0], limit, offset, fromBlock, toBlock),
           this.getTransactionHistory(src20Params),
         ]);
-        const nativeTxs = native.status === "fulfilled" ? native.value : [];
+        const sUSDCTxs = sUSDC.status === "fulfilled" ? sUSDC.value.transactions : [];
         const erc20Txs = erc20.status === "fulfilled" ? erc20.value : [];
         const src20Txs = src20Result.status === "fulfilled" ? src20Result.value.transactions : [];
-        const merged = [...nativeTxs, ...erc20Txs, ...src20Txs].sort((a, b) =>
-          (b.timestamp ?? "").localeCompare(a.timestamp ?? "")
-        );
+        // Deduplicate: sUSDC txs may overlap with general ERC-20 query if no contract filter
+        const seen = new Set<string>();
+        const deduped = [...sUSDCTxs, ...erc20Txs, ...src20Txs].filter((tx) => {
+          if (seen.has(tx.transaction_hash)) return false;
+          seen.add(tx.transaction_hash);
+          return true;
+        });
+        const merged = deduped.sort((a, b) => (b.timestamp ?? "").localeCompare(a.timestamp ?? ""));
         const allPage = merged.slice(0, limit);
         return {
           transactions: allPage,
           fromBlock: fromBlock ?? "0",
           toBlock: toBlock ?? "latest",
-          source: "socialscan-txlist+tokentx+eth_getLogs",
+          source: "socialscan-tokentx+eth_getLogs",
           total: merged.length,
           warning: dateOutOfRangeWarning,
         };
@@ -163,16 +164,6 @@ export class TransactionHistoryService {
             `SocialScan unavailable (${(explorerErr as Error).message}), falling back to eth_getLogs`
           );
         }
-    }
-
-    if (type === "native") {
-      throw this.rpc.errorHandler.handleApiError(
-        new Error(
-          "Native ETH transaction history requires the SocialScan Explorer API (no RPC fallback). " +
-            "Set SOCIALSCAN_API_KEY in your environment (get a key at developer.socialscan.io)."
-        ),
-        "fetching transaction history"
-      );
     }
 
     const isSrc20 = type === "src20";
@@ -241,8 +232,23 @@ export class TransactionHistoryService {
         vkToBlock = scannedTo;
       }
 
-      allLogs.sort((a, b) => parseInt(b.blockNumber, 16) - parseInt(a.blockNumber, 16));
-      const sliced = allLogs.slice(offset, offset + limit);
+      // SRC-20 emits 2 log events per transfer (one encrypted to sender's key,
+      // one to recipient's key). Deduplicate by transactionHash, preferring the
+      // received-side log when available - its encryptedAmount is decryptable with
+      // our viewing key. Falls back to the sent-side log for outgoing-only txs.
+      const txHashToLog = new Map<string, EthLog>();
+      for (const log of allLogs) {
+        const existing = txHashToLog.get(log.transactionHash);
+        const isReceived =
+          log.topics[2]?.slice(-40).toLowerCase() === address.slice(2).toLowerCase();
+        if (!existing || isReceived) {
+          txHashToLog.set(log.transactionHash, log);
+        }
+      }
+      const dedupedLogs = [...txHashToLog.values()].sort(
+        (a, b) => parseInt(b.blockNumber, 16) - parseInt(a.blockNumber, 16)
+      );
+      const sliced = dedupedLogs.slice(offset, offset + limit);
 
       const uniqueBlocks = [...new Set(sliced.map((l) => l.blockNumber))];
       const uniqueContracts = [...new Set(sliced.map((l) => l.address))];
@@ -259,7 +265,7 @@ export class TransactionHistoryService {
           if (block) blockTimestamps.set(blockNum, this.rpc.toIsoTimestamp(block.timestamp));
         }),
         ...uniqueContracts.map(async (contractAddr) => {
-          const info = await this._getErc20Info(contractAddr);
+          const info = await this._getTokenInfo(contractAddr);
           tokenDecimals.set(contractAddr, info.decimals ?? DEFAULT_TOKEN_DECIMALS);
           tokenSymbols.set(contractAddr, info.symbol ?? contractAddr);
         }),
@@ -276,7 +282,7 @@ export class TransactionHistoryService {
           const decimals = tokenDecimals.get(log.address) ?? DEFAULT_TOKEN_DECIMALS;
           const symbol = tokenSymbols.get(log.address) ?? log.address;
           const logKey = `${log.transactionHash}-${log.logIndex}`;
-          let amount = 0;
+          let amount = "0";
 
           if (receivedSet.has(logKey)) {
             const dataHex = (log.data as string).slice(2);
@@ -287,8 +293,7 @@ export class TransactionHistoryService {
             try {
               const plaintext = await new AesGcmCrypto(viewingKey).decrypt(encryptedPart, nonce);
               const rawAmount = BigInt(plaintext);
-              const divisor = BigInt(10 ** decimals);
-              amount = Number(rawAmount / divisor) + Number(rawAmount % divisor) / 10 ** decimals;
+              amount = formatUnits(rawAmount, decimals);
             } catch {
               // encryptedAmount was empty or used a different key
             }
@@ -320,7 +325,7 @@ export class TransactionHistoryService {
         fromBlock: vkFromBlock,
         toBlock: vkToBlock,
         source: "eth_getLogs-viewing-key",
-        total: allLogs.length,
+        total: dedupedLogs.length,
         warning: dateOutOfRangeWarning,
       };
     }
@@ -389,7 +394,7 @@ export class TransactionHistoryService {
         if (block) blockTimestamps.set(blockNum, this.rpc.toIsoTimestamp(block.timestamp));
       }),
       ...uniqueContracts.map(async (contractAddr) => {
-        const info = await this._getErc20Info(contractAddr);
+        const info = await this._getTokenInfo(contractAddr);
         tokenDecimals.set(contractAddr, info.decimals ?? DEFAULT_TOKEN_DECIMALS);
         tokenSymbols.set(contractAddr, info.symbol ?? contractAddr);
       }),
@@ -399,7 +404,7 @@ export class TransactionHistoryService {
       sliced.map(async (log) => {
         const decimals = tokenDecimals.get(log.address) ?? DEFAULT_TOKEN_DECIMALS;
         const symbol = tokenSymbols.get(log.address) ?? log.address;
-        let amount = 0;
+        let amount = "0";
         if (isSrc20 && encryptionSk) {
           const decrypted = await this.shielded.decryptSrc20Amount(
             log.transactionHash,
@@ -409,7 +414,7 @@ export class TransactionHistoryService {
           if (decrypted !== null) amount = decrypted;
         } else if (!isSrc20) {
           const rawAmount = BigInt(log.data || "0x0");
-          amount = Number(rawAmount) / 10 ** decimals;
+          amount = formatUnits(rawAmount, decimals);
         }
 
         return {
@@ -505,7 +510,7 @@ export class TransactionHistoryService {
   }
 
   // Inline ERC-20 info helper - avoids a circular reference back to BlockchainApiService
-  private async _getErc20Info(
+  private async _getTokenInfo(
     contractAddress: string
   ): Promise<{ name: string | null; symbol: string | null; decimals: number | null }> {
     const call = async (data: string): Promise<string> => {

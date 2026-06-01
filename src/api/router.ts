@@ -1,7 +1,13 @@
 import { Router } from "express";
 import { MainSDK } from "../MainSDK.js";
 import { ApiController } from "./controllers/controller.js";
-import { validate, transferBody, txHashParam, tokenBalancesQuery } from "./validation/index.js";
+import {
+  validate,
+  transferBody,
+  txHashParam,
+  tokenBalancesQuery,
+  transactionsQuery,
+} from "./validation/index.js";
 import { z } from "zod";
 import { register } from "prom-client";
 
@@ -16,7 +22,7 @@ const vaultIdParam = z.object({
  * Routes (all under /api):
  *   GET  /api/:vaultId/address
  *   GET  /api/:vaultId/public-key
- *   GET  /api/:vaultId/native-balance
+
  *   GET  /api/:vaultId/token-balances?type=erc20|src20|all&contracts=0x...
  *   POST /api/:vaultId/src20/register-key
  *   GET  /api/:vaultId/src20/key-status
@@ -145,30 +151,6 @@ export const configureRouter = (sdk: MainSDK): Router => {
 
   /**
    * @openapi
-   * /api/{vaultId}/native-balance:
-   *   get:
-   *     tags: [Balance]
-   *     summary: Get vault native ETH balance
-   *     parameters:
-   *       - in: path
-   *         name: vaultId
-   *         required: true
-   *         schema:
-   *           type: string
-   *     responses:
-   *       200:
-   *         description: Native balance
-   *       400:
-   *         description: Invalid vaultId
-   */
-  router.get(
-    "/:vaultId/native-balance",
-    validate({ params: vaultIdParam }),
-    controller.getNativeBalance
-  );
-
-  /**
-   * @openapi
    * /api/{vaultId}/token-balances:
    *   get:
    *     tags: [Balance]
@@ -277,10 +259,8 @@ export const configureRouter = (sdk: MainSDK): Router => {
    *       **`type` parameter controls which asset class is fetched:**
    *       - `erc20` (default) - standard ERC-20 Transfer events. Uses SocialScan `tokentx` if
    *         `SOCIALSCAN_API_KEY` is set, otherwise falls back to `eth_getLogs` (last 99k blocks).
-   *       - `native` - native ETH transfers. **Requires `SOCIALSCAN_API_KEY`** (ETH transfers
-   *         produce no logs on any EVM chain; only the explorer indexes them).
-   *       - `src20` - Seismic SRC-20 Transfer events.
-   *       - `all` - native + ERC-20 merged. **Requires `SOCIALSCAN_API_KEY`** for native portion.
+   *       - `src20` - Seismic SRC-20 Transfer events. For sUSDC-only history, pass `contracts=0x790701048922e265105fd6a4467a2901c2201c43` (sUSDC testnet contract).
+   *       - `all` - ERC-20 + SRC-20 merged. **Requires `SOCIALSCAN_API_KEY`** for ERC-20.
    *     parameters:
    *       - in: path
    *         name: vaultId
@@ -291,7 +271,7 @@ export const configureRouter = (sdk: MainSDK): Router => {
    *         name: type
    *         schema:
    *           type: string
-   *           enum: [native, erc20, src20, all]
+   *           enum: [erc20, src20, all]
    *           default: erc20
    *         description: Asset type to fetch (see description above).
    *       - in: query
@@ -368,7 +348,7 @@ export const configureRouter = (sdk: MainSDK): Router => {
    */
   router.get(
     "/:vaultId/transactions",
-    validate({ params: vaultIdParam }),
+    validate({ params: vaultIdParam, query: transactionsQuery }),
     controller.getTransactionHistory
   );
 
@@ -411,7 +391,7 @@ export const configureRouter = (sdk: MainSDK): Router => {
    *       Transfers assets from the given vault to a destination.
    *
    *       **Transfer types:**
-   *       - `ETH` - native coin transfer
+   *       - `SUSDC` - sUSDC transfer (Seismic's primary gas/value token; contract address is baked in)
    *       - `ERC20` - standard ERC-20 token transfer (requires `contractAddress`)
    *       - `SRC20` - Seismic shielded token transfer with encrypted calldata (requires `contractAddress`)
    *
@@ -435,10 +415,10 @@ export const configureRouter = (sdk: MainSDK): Router => {
    *             properties:
    *               type:
    *                 type: string
-   *                 enum: [ETH, ERC20, SRC20]
+   *                 enum: [SUSDC, ERC20, SRC20]
    *                 description: |
    *                   Asset type to transfer:
-   *                   - `ETH`: native coin
+   *                   - `SUSDC`: sUSDC token (contract address baked in; no contractAddress needed)
    *                   - `ERC20`: standard token (requires contractAddress)
    *                   - `SRC20`: Seismic shielded token (requires contractAddress)
    *               recipient:
@@ -451,7 +431,7 @@ export const configureRouter = (sdk: MainSDK): Router => {
    *                 example: "1"
    *               amount:
    *                 type: string
-   *                 description: Amount to transfer in whole units as a string (e.g. "0.5" for 0.5 ETH)
+   *                 description: Amount to transfer in whole units as a string (e.g. "1.5" for 1.5 sUSDC)
    *                 example: "0.5"
    *               contractAddress:
    *                 type: string
@@ -465,16 +445,16 @@ export const configureRouter = (sdk: MainSDK): Router => {
    *                 type: string
    *                 description: Optional label attached to the Fireblocks signing request
    *           examples:
-   *             ETH to address:
+   *             sUSDC to address:
    *               value:
-   *                 type: ETH
+   *                 type: SUSDC
    *                 recipient: "0xd07afc9df1333f577ee83f92250dc854b227720f"
-   *                 amount: "0.5"
-   *             ETH to vault:
+   *                 amount: "1.5"
+   *             sUSDC to vault:
    *               value:
-   *                 type: ETH
+   *                 type: SUSDC
    *                 destinationVaultId: "1"
-   *                 amount: "0.5"
+   *                 amount: "1.5"
    *             ERC20 to address:
    *               value:
    *                 type: ERC20

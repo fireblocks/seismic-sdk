@@ -7,9 +7,8 @@ import { FireblocksConfig, TokenType, TransactionType } from "../types/index.js"
 import { config, chain_info } from "./index.js";
 
 interface BalanceChecker {
-  getBlockchainApiService(): { estimateTxFee(): Promise<number> };
+  estimateTxFee(): Promise<number>;
   getFtBalances(vaultId: string): Promise<{ token: TokenType; balance: number }[]>;
-  getNativeBalance(vaultId: string): Promise<number>;
 }
 
 // Returns credentials for Fireblocks SDK initialization
@@ -59,7 +58,6 @@ export const checkParamsAndAdjustAmount = async (
   vaultAccountId: string,
   recipientAddress: string,
   amount: string,
-  grossTransaction: boolean | undefined,
   type: TransactionType,
   token?: TokenType
 ): Promise<{
@@ -89,34 +87,11 @@ export const checkParamsAndAdjustAmount = async (
       };
     }
 
-    let numAmount = typeof amount === "string" ? parseFloat(amount) : amount;
-    let smallestUnitAmount =
-      type == TransactionType.FungibleToken ? ftToUnits(numAmount, token!) : coinToUnits(numAmount);
+    const numAmount = typeof amount === "string" ? parseFloat(amount) : amount;
+    const smallestUnitAmount = ftToUnits(numAmount, token!);
 
-    let fee = 0;
-
-    if (type == TransactionType.Native) {
-      fee = await sdk.getBlockchainApiService().estimateTxFee();
-    }
-
-    // if its a gross STX transfer, deduct fee from transferred amount
-    if (type == TransactionType.Native && grossTransaction) {
-      numAmount -= fee;
-      if (numAmount <= 0) {
-        return {
-          validParams: false,
-          reason: `Amount after fee deduction is zero or negative`,
-        };
-      }
-    }
-
-    let balance: number | undefined;
-    if (type == TransactionType.FungibleToken) {
-      const balances = await sdk.getFtBalances(vaultAccountId);
-      balance = balances.find((b) => b.token === token)?.balance;
-    } else {
-      balance = await sdk.getNativeBalance(vaultAccountId);
-    }
+    const balances = await sdk.getFtBalances(vaultAccountId);
+    const balance = balances.find((b) => b.token === token)?.balance;
 
     if (balance === undefined) {
       return {
@@ -125,16 +100,12 @@ export const checkParamsAndAdjustAmount = async (
       };
     }
 
-    if (numAmount + fee > balance) {
+    if (numAmount > balance) {
       return {
         validParams: false,
         reason: `Insufficient funds. Available balance: ${balance}, required: ${numAmount}`,
       };
     }
-
-    // Recalculate microAmount after any adjustments
-    smallestUnitAmount =
-      type == TransactionType.FungibleToken ? ftToUnits(numAmount, token!) : coinToUnits(numAmount);
 
     return {
       validParams: true,

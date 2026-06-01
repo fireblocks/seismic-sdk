@@ -42,20 +42,6 @@ export class ApiController {
   };
 
   /**
-   * GET /api/:vaultId/native-balance
-   * Returns the vault's native ETH balance on Seismic.
-   */
-  public getNativeBalance = async (req: Request, res: Response) => {
-    const { vaultId } = req.params as Record<string, string>;
-    try {
-      const balance = await this.sdk.getNativeBalance(vaultId);
-      res.status(200).json({ success: true, data: { vaultId, balance } });
-    } catch (error) {
-      this.handleError(error, res, "getNativeBalance");
-    }
-  };
-
-  /**
    * GET /api/:vaultId/token-balances?type=erc20|src20|all&contracts=0x...
    * Returns ERC-20 and/or SRC-20 token balances. Contracts are optional - omitting
    * them triggers auto-discovery. When type=all, each type fails independently:
@@ -104,7 +90,7 @@ export class ApiController {
       const parsedOffset = offset !== undefined ? parseInt(offset) : 0;
       const result = await this.sdk.getTransactionHistory({
         vaultId,
-        type: (type as "native" | "erc20" | "src20" | "all") ?? "all",
+        type: (type as "erc20" | "src20" | "all") ?? "all",
         fromBlock,
         toBlock,
         before,
@@ -155,13 +141,13 @@ export class ApiController {
 
   /**
    * POST /api/:vaultId/transfer
-   * Submits an ETH, ERC-20, or SRC-20 (shielded) transfer.
+   * Submits a sUSDC, ERC-20, or SRC-20 (shielded) transfer.
    */
   public transfer = async (req: Request, res: Response) => {
     const { vaultId } = req.params as Record<string, string>;
     const { type, recipient, destinationVaultId, amount, contractAddress, decimals, note } =
       req.body as {
-        type: "ETH" | "ERC20" | "SRC20";
+        type: "SUSDC" | "ERC20" | "SRC20";
         recipient?: string;
         destinationVaultId?: string;
         amount: string;
@@ -170,49 +156,17 @@ export class ApiController {
         note?: string;
       };
 
-    // Validate required parameters
-    if (!destinationVaultId && !recipient) {
-      res.status(400).json({
-        success: false,
-        error: "Either recipient or destinationVaultId must be provided",
-      });
-      return;
-    }
-
-    if ((type === "ERC20" || type === "SRC20") && !contractAddress) {
-      res.status(400).json({
-        success: false,
-        error: `contractAddress is required for ${type} transfers`,
-      });
-      return;
-    }
-
     try {
-      const to = destinationVaultId
-        ? await this.sdk.getSeismicAddress(destinationVaultId)
-        : (recipient as string);
-
-      let result;
-      if (type === "SRC20") {
-        result = await this.sdk.createShieldedTransaction(
-          vaultId,
-          to,
-          amount,
-          contractAddress as string,
-          note
-        );
-      } else if (type === "ERC20") {
-        result = await this.sdk.createErc20Transaction(
-          vaultId,
-          to,
-          amount,
-          contractAddress as string,
-          decimals,
-          note
-        );
-      } else {
-        result = await this.sdk.createNativeTransaction(vaultId, to, amount, false, note);
-      }
+      const result = await this.sdk.transfer({
+        vaultId,
+        type,
+        recipient,
+        destinationVaultId,
+        amount,
+        contractAddress,
+        decimals,
+        note,
+      });
       res.status(200).json({ success: true, txHash: result.txHash });
     } catch (error) {
       this.handleError(error, res, "transfer");
@@ -255,7 +209,7 @@ export class ApiController {
   public getContractInfo = async (req: Request, res: Response) => {
     const { contractAddress } = req.params as Record<string, string>;
     try {
-      const data = await this.sdk.getErc20Info(contractAddress);
+      const data = await this.sdk.getTokenInfo(contractAddress);
       res.status(200).json({ success: true, data: { contractAddress, ...data } });
     } catch (error) {
       this.handleError(error, res, "getContractInfo");
@@ -294,6 +248,7 @@ export class ApiController {
         statusCode: error.statusCode,
         errorType: error.errorType,
         service: error.service,
+        errorInfo: error.errorInfo,
         message: error.message,
       });
       res.status(error.statusCode || 500).json({
@@ -301,8 +256,6 @@ export class ApiController {
         error: error.message,
         statusCode: error.statusCode,
         type: error.errorType,
-        info: error.errorInfo,
-        service: error.service,
       });
     } else {
       const message = error instanceof Error ? error.message : "Unknown error";

@@ -32,3 +32,5 @@ yarn.lock
 
 *.md
 !README.md
+tx-log.ndjson
+tx-log*.ndjson

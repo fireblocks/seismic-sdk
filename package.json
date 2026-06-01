@@ -1,6 +1,6 @@
 {
   "name": "@fireblocks/seismic-sdk",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "type": "module",
@@ -71,7 +71,7 @@
     "express": "^5.1.0",
     "jsonwebtoken": "^9.0.2",
     "prom-client": "^15.1.3",
-    "seismic-viem": "^2.0.0",
+    "seismic-viem": "^2.0.1",
     "swagger-jsdoc": "^6.2.8",
     "swagger-ui-express": "^5.0.1",
     "tweetnacl": "^1.0.3",

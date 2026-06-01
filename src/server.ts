@@ -12,7 +12,7 @@ collectDefaultMetrics();
 
 const logger = new Logger("app:server-setup");
 
-const startServer = () => {
+const startServer = async () => {
   // Validate required environment variables
   (() => {
     ["FIREBLOCKS_API_USER_KEY", "FIREBLOCKS_API_USER_SECRET_KEY_PATH"].forEach((key) => {
@@ -34,13 +34,16 @@ const startServer = () => {
     userAgent: process.env.HTTP_USER_AGENT,
   });
 
-  // Initialize a single shared SDK instance
-  const sdk = new MainSDK({
+  // Initialize a single shared SDK instance with deterministic signing verification
+  const sdk = await MainSDK.create({
     apiKey: config.FIREBLOCKS.apiKey || "",
     apiSecret: config.FIREBLOCKS.secretKey || "",
     basePath: (config.FIREBLOCKS.basePath as BasePath) || BasePath.US,
     testnet: config.TESTNET,
+    rpcUrl: config.RPC_URL,
     httpClient,
+    skipDeterminismCheck: process.env.SKIP_DETERMINISM_CHECK === "true",
+    socialscanApiKey: config.SOCIALSCAN_API_KEY,
   });
 
   // Mount API routes

@@ -2,19 +2,28 @@ import { type Hex } from "viem";
 import { BasePath } from "@fireblocks/ts-sdk";
 import { GetTransactionsHistoryOpts } from "./index.js";
 
-
 export interface TokenBalance {
   contractAddress: string;
   name?: string | null;
   symbol?: string | null;
   decimals?: number | null;
-  balance?: number;
+  /** Human-readable balance as a decimal string (e.g. "250.5"). Use rawBalance for on-chain wei value. */
+  balance?: string;
   rawBalance?: string;
 }
 
+/**
+ * Balances grouped by token type.
+ * sUSDC is a singleton (one well-known contract); src20 is a list of discovered contracts.
+ */
 export interface TokenBalancesResult {
+  /** sUSDC balance (Seismic's primary gas/value token). */
+  sUSDC?: TokenBalance;
+  /** ERC-20 token balances (standard plaintext tokens). */
   erc20?: TokenBalance[];
+  /** SRC-20 shielded token balances. */
   src20?: TokenBalance[];
+  sUSDCError?: string;
   erc20Error?: string;
   src20Error?: string;
 }
@@ -28,18 +37,17 @@ export interface FireblocksConfig {
   testnet?: boolean;
 }
 
-
 export type GetTransactionHistoryFromIndexerOpts = {
   address: string;
   /**
    * Asset type to fetch:
-   * - "native"  → ETH transfers (requires SOCIALSCAN_API_KEY; no logs on RPC)
+   * - "susdc"   → sUSDC transfers (Seismic's primary gas/value token; requires SOCIALSCAN_API_KEY)
    * - "erc20"   → Standard ERC-20 Transfer events
    * - "src20"   → Seismic SRC-20 Transfer events (encrypted amounts, requires contracts filter)
-   * - "all"     → Native + ERC-20 merged (requires SOCIALSCAN_API_KEY for native)
+   * - "all"     → sUSDC + ERC-20 + SRC-20 merged (requires SOCIALSCAN_API_KEY for sUSDC/ERC-20)
    * Defaults to "erc20" (always available via eth_getLogs fallback).
    */
-  type?: "native" | "erc20" | "src20" | "all";
+  type?: "susdc" | "erc20" | "src20" | "all";
   /** Hex block number or "earliest"/"latest". Defaults to "earliest". */
   fromBlock?: string;
   /** Hex block number or "earliest"/"latest". Defaults to "latest". */
@@ -108,11 +116,12 @@ export interface UnsignedTransaction {
  * this is a generic structure and can be extended with more fields as needed.
  */
 export type Transaction = {
-  type: TransactionType.Native | TransactionType.FungibleToken;
+  type: TransactionType.FungibleToken;
   tokenInfo?: TokenInfo;
   sender: string;
   recipient: string;
-  amount: number;
+  /** Human-readable amount as a decimal string (e.g. "250.5"). Avoids JS float precision loss. */
+  amount: string;
   /** Raw AES-GCM ciphertext from a SRC-20 Transfer event. Present only for SRC-20 txs. */
   encryptedAmount?: string;
   transaction_hash: string;
@@ -121,7 +130,6 @@ export type Transaction = {
 };
 
 export enum TransactionType {
-  Native = "NATIVE",
   FungibleToken = "FUNGIBLE_TOKEN",
 }
 
@@ -131,7 +139,6 @@ export enum TransactionType {
  * as encrypted suint256 values and require signed reads to query.
  */
 export enum TokenType {
-  Native = "NATIVE",
   SRC20 = "SRC20",
 }
 
@@ -152,7 +159,6 @@ export enum Networks {
   Testnet = "seismic_testnet",
 }
 
-
 /**
  * Per-vault identity state cached in MainSDK's vault map.
  * Populated lazily on first use of each vault account.
@@ -170,11 +176,11 @@ export interface VaultData {
 
 /**
  * Transfer type for POST /api/:vaultId/transfer.
- * ETH  - plain ETH transfer
- * ERC20 - standard plaintext ERC-20 transfer
- * SRC20 - Seismic shielded transfer (type 0x4A, AES-GCM encrypted calldata)
+ * SUSDC - sUSDC transfer (Seismic's primary gas/value token; contract address baked in)
+ * ERC20 - standard plaintext ERC-20 transfer (requires contractAddress)
+ * SRC20 - Seismic shielded transfer (type 0x4A, AES-GCM encrypted calldata; requires contractAddress)
  */
-export type TransferType = "ETH" | "ERC20" | "SRC20";
+export type TransferType = "SUSDC" | "ERC20" | "SRC20";
 
 /**
  * Response types for getter methods that previously threw errors.

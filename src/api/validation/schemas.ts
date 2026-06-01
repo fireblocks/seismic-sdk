@@ -139,7 +139,7 @@ export const submitTransactionBody = z.object({
  * Validates query params for GET /api/:vaultId/transactions
  */
 export const transactionsQuery = z.object({
-  type: z.enum(["native", "erc20", "src20", "all"]).optional(),
+  type: z.enum(["erc20", "src20", "all"]).optional(),
   contracts: z.string().optional(),
   limit: z.string().optional(),
   offset: z.string().optional(),
@@ -196,7 +196,7 @@ export const tokenBalancesQuery = z.object({
  */
 export const transferBody = z
   .object({
-    type: z.enum(["ETH", "ERC20", "SRC20"] as const, "type must be ETH, ERC20, or SRC20"),
+    type: z.enum(["SUSDC", "ERC20", "SRC20"] as const, "type must be SUSDC, ERC20, or SRC20"),
     recipient: z
       .string()
       .regex(/^0x[0-9a-fA-F]{40}$/, "recipient must be a valid EVM address")
@@ -221,7 +221,7 @@ export const transferBody = z
   .refine((data) => !!data.recipient !== !!data.destinationVaultId, {
     message: "exactly one of recipient or destinationVaultId must be provided",
   })
-  .refine((data) => data.type === "ETH" || !!data.contractAddress, {
+  .refine((data) => data.type === "SUSDC" || !!data.contractAddress, {
     message: "contractAddress is required for ERC20 and SRC20 transfers",
     path: ["contractAddress"],
   });

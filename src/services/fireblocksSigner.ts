@@ -157,7 +157,15 @@ export class FireblocksSigner {
 
       const signedMessage = txInfo.signedMessages?.[0];
       if (!signedMessage) {
-        throw new Error("No signed messages returned from Fireblocks");
+        // This is a secondary guard for the rare case where the tx reaches COMPLETED but
+        // signedMessages is still empty (unexpected Fireblocks response).
+        throw new SdkApiError(
+          "No signed messages returned from Fireblocks",
+          502,
+          "RAW_SIGN_EMPTY_RESPONSE",
+          { txId, signedMessages: txInfo.signedMessages },
+          "FireblocksSigner"
+        );
       }
 
       this.logger.info(`RAW sign completed | txId:${txId} | vault:${vaultAccountId}`);
